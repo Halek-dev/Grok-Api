@@ -57,8 +57,7 @@
   var framesField = $('frames-field'), framesEl = $('frames'), framesValue = $('frames-value');
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
-      sourceLoaded = $('source-loaded'), sourceThumb = $('source-thumb'),
-      sourceName = $('source-name'), sourceDims = $('source-dims'), sourceRemove = $('source-remove');
+      sourceList = $('source-list');
   var actionBtn = $('action'), actionReason = $('action-reason'),
       costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
   var runError = $('run-error');
@@ -82,7 +81,7 @@
     resolution: '1k',
     frames: 1,
     name: '',
-    source: null // { dataUri, name, size, width, height }
+    sources: [] // [{ dataUri, name, size, width, height }] — one edit per photo
   };
   var runs = [];
   var busy = false;
@@ -91,6 +90,7 @@
   var runTimer = null;
   var lightboxState = null;
   var activeRun = null;
+  var retiredFallback = null;
   var lastFocused = null;
   var seq = 0;
 
@@ -239,10 +239,10 @@
     var per = perImage(state.model, state.quality, state.resolution, mode);
     if (per == null) return null;
     var p = priceEntry(state.model);
-    var count = mode === 'edit' ? 1 : state.frames;
-    // input is charged once per source image, so it applies to edits only.
+    var count = mode === 'edit' ? Math.max(1, state.sources.length) : state.frames;
+    // input is charged once per source image, so an edit of N photos pays it N times.
     var input = mode === 'edit' && p && typeof p.input === 'number' ? p.input : 0;
-    return { total: per * count + input, per: per, count: count, input: input };
+    return { total: (per + input) * count, per: per, count: count, input: input };
   }
 
   // -------------------------------------------------------------------------
@@ -311,7 +311,9 @@
 
   function renderRetirement() {
     retirementEl.innerHTML = '';
-    var r = retirementFor(state.model);
+    // The retired model cannot be selected, so its notice is shown against
+    // whatever replaced it until the user picks a model themselves.
+    var r = retirementFor(state.model) || (retiredFallback ? retirementFor(retiredFallback) : null);
     if (!r) { retirementEl.hidden = true; return; }
     retirementEl.hidden = false;
 
@@ -363,6 +365,10 @@
     });
 
     if (!prices[state.model] || modelIsRetired(state.model)) {
+      // Moving someone off a model they had chosen is not something to do
+      // silently — remember it so the notice can explain why their images will
+      // look different from the ones they already approved.
+      if (prices[state.model] && modelIsRetired(state.model)) retiredFallback = state.model;
       var fallback = live.filter(function (id) { return prices[id].isDefault; })[0] || live[0] || ids[0];
       state.model = fallback;
     }
@@ -401,6 +407,30 @@
     sizeEl.value = state.resolution;
   }
 
+  // The design shows the open list with a price on every row, so you compare
+  // while choosing rather than one selection at a time. A native select keeps the
+  // keyboard and screen-reader behaviour, so the prices go into the option text.
+  function buildQualityOptions() {
+    var p = priceEntry(state.model);
+    if (!p || !p.tiers || p.tiers['default']) return;
+
+    var keys = ['auto'].concat(Object.keys(p.tiers));
+    if (keys.indexOf(state.quality) === -1) state.quality = 'auto';
+
+    qualityEl.innerHTML = '';
+    keys.forEach(function (q) {
+      var per = perImage(state.model, q, state.resolution, state.mode);
+      var label = q.charAt(0).toUpperCase() + q.slice(1);
+      var opt = document.createElement('option');
+      opt.value = q;
+      opt.textContent = per == null
+        ? label
+        : label + ' — ' + money(per) + (state.mode === 'edit' ? '' : ' a frame');
+      qualityEl.appendChild(opt);
+    });
+    qualityEl.value = state.quality;
+  }
+
   function renderQuality() {
     // Only grok-imagine-image-2.0 accepts quality; sending it to any other model
     // is a 400, so the control is absent rather than present-and-broken.
@@ -409,7 +439,9 @@
       return;
     }
     qualityField.hidden = false;
-    qualityEl.value = state.quality;
+    // Rebuilt on every settings change: the price on each row depends on the
+    // model, the size and whether this is a generation or an edit.
+    buildQualityOptions();
 
     var per = perImage(state.model, state.quality, state.resolution, state.mode);
     if (per == null) {
@@ -439,22 +471,50 @@
     promptEl.classList.toggle('textarea--edit', editing);
     promptEl.classList.toggle('textarea--generate', !editing);
     promptGuidance.textContent = editing
-      ? 'An edit returns one image. Run it again for another attempt.'
+      ? (state.sources.length > 1
+          ? 'The same change is applied to each photo, one image back per photo.'
+          : 'An edit returns one image. Run it again for another attempt.')
       : 'Plain description works better than keywords.';
   }
 
+  // The dropzone stays put so more photos can be added; loaded ones list below it.
   function renderSource() {
-    var has = Boolean(state.source);
-    sourceLoaded.hidden = !has;
-    dropzone.hidden = has;
-    if (has) {
-      sourceThumb.src = state.source.dataUri;
-      sourceThumb.alt = 'Source photo: ' + state.source.name;
-      sourceName.textContent = state.source.name;
-      var dims = state.source.width
-        ? state.source.width + '×' + state.source.height + ' · ' + bytes(state.source.size)
-        : bytes(state.source.size);
-      sourceDims.textContent = dims;
+    sourceList.innerHTML = '';
+    state.sources.forEach(function (src, i) {
+      var row = el('div', 'source');
+
+      var thumb = document.createElement('img');
+      thumb.className = 'source__thumb';
+      thumb.src = src.dataUri;
+      thumb.alt = 'Photo to edit: ' + src.name;
+      row.appendChild(thumb);
+
+      var meta = el('div', 'source__meta');
+      meta.appendChild(el('div', 'source__name', src.name));
+      meta.appendChild(el('div', 'source__dims num', src.width
+        ? src.width + '×' + src.height + ' · ' + bytes(src.size)
+        : bytes(src.size)));
+      row.appendChild(meta);
+
+      var remove = el('button', 'btn-destructive on-sunken', 'Remove');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', 'Remove ' + src.name);
+      remove.disabled = busy;
+      remove.addEventListener('click', function () {
+        state.sources.splice(i, 1);
+        resetDropzone();
+        renderRail();
+        (state.sources.length ? sourceList.querySelector('button') : dropzone).focus();
+      });
+      row.appendChild(remove);
+
+      sourceList.appendChild(row);
+    });
+
+    var count = state.sources.length;
+    dropzoneTitle.dataset.more = count ? '1' : '';
+    if (!dropzone.classList.contains('is-rejected') && !dropzone.classList.contains('is-over')) {
+      dropzoneTitle.textContent = count ? 'Drop more photos here' : 'Drop photos here';
     }
   }
 
@@ -475,7 +535,10 @@
   // The action button: label, enabled state, reason, cost line
   // -------------------------------------------------------------------------
   function actionLabel() {
-    if (state.mode === 'edit') return 'Apply edit';
+    if (state.mode === 'edit') {
+      var photos = state.sources.length;
+      return photos > 1 ? 'Apply edit to ' + photos + ' photos' : 'Apply edit';
+    }
     return state.frames > 1 ? 'Generate ' + state.frames + ' frames' : 'Generate';
   }
 
@@ -483,7 +546,7 @@
     if (!config) return 'Loading the studio.';
     if (!config.hasKey) return null; // handled as a full error notice
     if (modelIsRetired(state.model)) return 'Pick a model that still accepts requests.';
-    if (state.mode === 'edit' && !state.source) {
+    if (state.mode === 'edit' && !state.sources.length) {
       return wordCount(promptEl.value) >= 3
         ? 'Add a photo to edit.'
         : 'Add a photo and describe the change.';
@@ -542,7 +605,9 @@
     costLine.hidden = false;
     costLabel.textContent = 'Estimated cost';
     if (state.mode === 'edit') {
-      costValue.textContent = money(est.total) + ' · 1 image';
+      costValue.textContent = est.count > 1
+        ? money(est.total) + ' · ' + est.count + ' × ' + money(est.per + est.input)
+        : money(est.total) + ' · 1 image';
     } else {
       costValue.textContent = money(est.total) + ' · ' + est.count + ' × ' + money(est.per);
     }
@@ -678,11 +743,12 @@
     var total = run.frames.length;
     var got = doneImages(run).length;
     var text;
+    var word = run.mode === 'edit' ? ' photo' : ' frame';
     if (run.status === 'running' || got === total) {
-      text = total + (total === 1 ? ' frame' : ' frames');
+      text = total + (total === 1 ? word : word + 's');
     } else {
       // Say plainly that some are missing rather than quoting the number asked for.
-      text = got + ' of ' + total + ' frames';
+      text = got + ' of ' + total + word + 's';
     }
     if (run.status !== 'running' && typeof run.cost === 'number' && run.cost > 0) {
       text += ' · ' + money(run.cost);
@@ -941,13 +1007,13 @@
     if (state.mode !== 'edit') promptEl.value = '';
 
     // Chaining matters: the source may itself be the output of an edit.
-    state.source = {
+    state.sources = [{
       dataUri: image.src,
       name: imageFileName(run, image),
       size: image.bytes || 0,
       width: image.width || 0,
       height: image.height || 0
-    };
+    }];
     setMode('edit');
     resetDropzone();
     clearError();
@@ -967,7 +1033,7 @@
       shape: run.shape,
       resolution: run.resolution,
       n: run.frames ? run.frames.length : run.n,
-      source: run.source || null
+      sources: run.sources || []
     });
   }
 
@@ -1077,7 +1143,7 @@
       shape: state.shape,
       resolution: state.resolution,
       n: state.mode === 'edit' ? 1 : state.frames,
-      source: state.mode === 'edit' && state.source ? state.source.dataUri : null
+      sources: state.mode === 'edit' ? state.sources.map(function (s) { return s.dataUri; }) : []
     };
   }
 
@@ -1093,15 +1159,19 @@
     sizeEl.disabled = on;
     framesEl.disabled = on;
     dropzone.disabled = on;
-    sourceRemove.disabled = on;
 
     actionBtn.disabled = on;
     actionBtn.classList.toggle('is-busy', on);
+    // Re-render the photo rows so their Remove buttons follow the busy state —
+    // pulling a source out from under a run in flight would strand it.
+    renderSource();
     if (on) {
       setBusyLabel(label);
       actionReason.hidden = true;
       costLine.hidden = false;
-      costLabel.textContent = 'Charged as frames arrive';
+      costLabel.textContent = state.mode === 'edit'
+        ? 'Charged as photos arrive'
+        : 'Charged as frames arrive';
       var est = estimate();
       costValue.textContent = est ? money(est.total) : 'unknown';
       promptGuidance.textContent = 'Locked while a run is in flight.';
@@ -1122,7 +1192,11 @@
   // Frames are requested one at a time, so the button can name the one being
   // worked on rather than the batch.
   function busyLabelFor(run) {
-    if (run.mode === 'edit') return 'Applying the edit';
+    if (run.mode === 'edit') {
+      if (run.frames.length === 1) return 'Applying the edit';
+      return 'Editing photo ' + Math.min(doneImages(run).length + 1, run.frames.length) +
+        ' of ' + run.frames.length;
+    }
     var got = doneImages(run).length;
     var total = run.frames.length;
     return 'Generating frame ' + Math.min(got + 1, total) + ' of ' + total;
@@ -1147,7 +1221,8 @@
       runId: run.id
     };
     if (run.mode === 'edit') {
-      body.image = run.source;
+      // The server wraps this into xAI's { url, type } shape; send the plain URI.
+      body.image = run.sources[index];
     } else {
       body.n = 1;
       body.aspect_ratio = run.shape;
@@ -1246,7 +1321,7 @@
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
 
-    var total = settings.mode === 'edit' ? 1 : settings.n;
+    var total = settings.mode === 'edit' ? Math.max(1, settings.sources.length) : settings.n;
     var frames = [];
     for (var i = 0; i < total; i++) frames.push({ status: 'queued', image: null, error: null });
 
@@ -1259,7 +1334,7 @@
       shape: settings.shape,
       resolution: settings.resolution,
       n: total,
-      source: settings.source,
+      sources: settings.sources || [],
       frames: frames,
       controllers: [],
       status: 'running',
@@ -1450,20 +1525,15 @@
     e.preventDefault();
     dropzone.classList.remove('is-over');
     var files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) takeFile(files[0]);
+    if (files && files.length) takeFiles(files);
   });
 
   fileInput.addEventListener('change', function () {
-    if (fileInput.files && fileInput.files.length) takeFile(fileInput.files[0]);
+    if (fileInput.files && fileInput.files.length) takeFiles(fileInput.files);
     fileInput.value = '';
   });
 
-  sourceRemove.addEventListener('click', function () {
-    state.source = null;
-    resetDropzone();
-    renderRail();
-    dropzone.focus();
-  });
+  // Removal is per row, wired in renderSource where each row is built.
 
   function fileKind(file) {
     if (file.type && file.type.indexOf('image/') === 0) return file.type.split('/')[1].toUpperCase();
@@ -1472,47 +1542,77 @@
     return dot === -1 ? 'file' : file.name.slice(dot + 1).toUpperCase();
   }
 
-  function takeFile(file) {
-    if (ACCEPTED_TYPES.indexOf(file.type) === -1) {
-      rejectDrop('That file is a ' + fileKind(file),
-        'Editing needs an image. Drop a JPG, PNG or WebP instead.');
-      state.source = null;
-      renderRail();
-      return;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      rejectDrop('That photo is ' + bytes(file.size),
-        'The limit is 10 MB. Export it smaller, or scale it to 2048px on the long edge and drop it again.');
-      state.source = null;
-      renderRail();
+  // The same cap as frames: ten edits in one run, ten frames in one run.
+  var MAX_SOURCES = 10;
+
+  function readOneFile(file) {
+    return new Promise(function (resolve) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var dataUri = String(reader.result);
+        var probe = new Image();
+        probe.onload = function () {
+          resolve({ dataUri: dataUri, name: file.name, size: file.size,
+                    width: probe.naturalWidth, height: probe.naturalHeight });
+        };
+        probe.onerror = function () {
+          resolve({ dataUri: dataUri, name: file.name, size: file.size, width: 0, height: 0 });
+        };
+        probe.src = dataUri;
+      };
+      reader.onerror = function () { resolve(null); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Takes whatever was dropped or chosen, keeps the usable photos and explains
+  // the first thing it had to turn away. Already-loaded photos are never lost to
+  // a bad file in the same batch.
+  async function takeFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList);
+    if (!files.length) return;
+
+    var room = MAX_SOURCES - state.sources.length;
+    var rejected = null;
+
+    if (room <= 0) {
+      rejectDrop('That is already ' + MAX_SOURCES + ' photos',
+        'Ten is the most in one run. Remove one to add another, or edit these first.');
       return;
     }
 
-    var reader = new FileReader();
-    reader.onload = function () {
-      var dataUri = String(reader.result);
-      var probe = new Image();
-      probe.onload = function () {
-        state.source = {
-          dataUri: dataUri, name: file.name, size: file.size,
-          width: probe.naturalWidth, height: probe.naturalHeight
-        };
-        resetDropzone();
-        clearError();
-        renderRail();
-      };
-      probe.onerror = function () {
-        state.source = { dataUri: dataUri, name: file.name, size: file.size, width: 0, height: 0 };
-        resetDropzone();
-        renderRail();
-      };
-      probe.src = dataUri;
-    };
-    reader.onerror = function () {
-      rejectDrop('That photo could not be read',
-        'The file may be damaged. Try exporting it again, then drop it here.');
-    };
-    reader.readAsDataURL(file);
+    var accepted = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (ACCEPTED_TYPES.indexOf(f.type) === -1) {
+        rejected = rejected || ['That file is a ' + fileKind(f),
+          'Editing needs an image. Drop a JPG, PNG or WebP instead.'];
+        continue;
+      }
+      if (f.size > MAX_UPLOAD_BYTES) {
+        rejected = rejected || ['That photo is ' + bytes(f.size),
+          'The limit is 10 MB. Export it smaller, or scale it to 2048px on the long edge and drop it again.'];
+        continue;
+      }
+      if (accepted.length >= room) {
+        rejected = rejected || ['That is more than ' + MAX_SOURCES + ' photos',
+          'Ten is the most in one run, so the rest were left out.'];
+        continue;
+      }
+      accepted.push(f);
+    }
+
+    var loaded = await Promise.all(accepted.map(readOneFile));
+    loaded.forEach(function (src) { if (src) state.sources.push(src); });
+
+    if (loaded.some(function (s) { return !s; }) && !rejected) {
+      rejected = ['A photo could not be read',
+        'The file may be damaged. Try exporting it again, then drop it here.'];
+    }
+
+    if (rejected) rejectDrop(rejected[0], rejected[1]);
+    else { resetDropzone(); clearError(); }
+    renderRail();
   }
 
   // -------------------------------------------------------------------------
@@ -1524,6 +1624,8 @@
   });
 
   modelEl.addEventListener('change', function () {
+    // Their own choice supersedes the explanation of the forced one.
+    retiredFallback = null;
     state.model = modelEl.value;
     buildModelOptions();
     renderRail();

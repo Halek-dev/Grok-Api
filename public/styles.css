@@ -633,6 +633,13 @@ button, input, textarea, select { font-family: inherit; }
 .dropzone.is-rejected .dropzone__title { color: var(--danger); }
 .dropzone.is-rejected .dropzone__body  { color: var(--text); }
 
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.source-list:not(:empty) { margin-top: 8px; }
+
 .source {
   background: var(--sunken);
   border: 1px solid var(--border);

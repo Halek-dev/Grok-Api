@@ -12,6 +12,19 @@
  * Node 18+. No dependencies.
  */
 
+// Global fetch and AbortSignal.timeout, both load-bearing here, do not exist
+// before Node 18. Say so plainly rather than failing later with a confusing
+// "fetch is not defined" in the middle of someone's first run.
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+if (!Number.isFinite(nodeMajor) || nodeMajor < 18) {
+  console.error('');
+  console.error('Imagine studio needs Node 18 or newer. This is Node ' + process.versions.node + '.');
+  console.error('');
+  console.error('Install a current version from https://nodejs.org, then run it again.');
+  console.error('');
+  process.exit(1);
+}
+
 const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');

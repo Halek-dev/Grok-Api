@@ -156,20 +156,37 @@ right extension.
 
 ### How frames are requested
 
-Asking for six frames sends **six separate requests, one image each**, up to three
-at a time, rather than one request for six.
+Asking for six frames sends **six separate requests, one image each**, three at a
+time, rather than one request for six.
 
-This is deliberate. Inside a single request xAI generates images one after
-another, so a six-frame batch took 105 seconds in testing and showed nothing until
-the last one finished — and at 2k a batch of seven or more ran past the server's
-timeout, losing work that had almost certainly already been billed. One image per
-request keeps every call short, lets frames appear as they land, confines a
-failure to the frame it happened to, and makes Cancel possible.
+This is deliberate, and measured. Inside a single request xAI generates images one
+after another: one frame took 10.6s, four took 105s. So a batch showed nothing
+until the last frame finished, and at 2k a batch of seven or more ran past the
+server's timeout — losing work that had almost certainly already been billed.
+
+Separate requests **do** run in parallel. Three at once completed in 5.3s against
+14.9s if run one after another, with no rate limiting. So this is roughly a
+2.8× speed-up as well as a usability fix.
 
 The cost is identical either way: xAI bills per image, not per request.
 
-To change how many run at once, edit `FRAME_CONCURRENCY` at the top of the run
-section in `public/app.js`. Raising it may trip the shared key's rate limit.
+To change how many run at once, edit `FRAME_CONCURRENCY` near the run section in
+`public/app.js`. Three is tested and safe; higher is untested and may trip the
+shared key's rate limit.
+
+### Editing several photos at once
+
+Drop up to ten photos into edit mode and the same instruction is applied to each,
+one image back per photo — ten photos, ten separate requests, ten results. The
+cost line shows the total before you commit, and each photo carries its own input
+charge.
+
+**The endpoint takes one source image per request, and that is a real limit.**
+You cannot feed it two photos and ask it to combine them. It will accept an array
+without complaint, but testing showed only the first image is used: sending a
+green photo and a magenta one with the instruction "return the SECOND photo"
+returned the green one. So this feature edits photos *in a batch*; it does not
+merge them.
 
 ### Imagine 1.5 Quality retires on 2 November 2026
 
@@ -301,6 +318,11 @@ same time. The button unlocks on the countdown, which comes from xAI's own
 **"The prepaid credits ran out"**
 The account balance is empty. Top it up in the xAI console. Images already on the
 page still download.
+
+**"Add a photo to edit"**
+Edit mode needs at least one photo. Drop up to ten and the same instruction is
+applied to each. If you were hoping to combine two photos into one, that is not
+something the API supports — see *Editing several photos at once* above.
 
 **"Some frames did not arrive"**
 Part of a run failed while the rest succeeded. The images that came back are kept

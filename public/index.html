@@ -61,22 +61,17 @@
 
         <!-- Photo to edit — edit mode only -->
         <div class="field" id="source-field" hidden>
-          <span class="label" id="source-label">Photo to edit</span>
+          <span class="label" id="source-label">Photos to edit</span>
 
           <button class="dropzone on-sunken" type="button" id="dropzone" aria-describedby="source-label">
-            <span class="dropzone__title" id="dropzone-title">Drop a photo here</span>
-            <span class="dropzone__body" id="dropzone-body">Or <span class="dropzone__link">choose a file</span>. JPG, PNG or WebP, up to 10 MB.</span>
+            <span class="dropzone__title" id="dropzone-title">Drop photos here</span>
+            <span class="dropzone__body" id="dropzone-body">Or <span class="dropzone__link">choose files</span>. JPG, PNG or WebP, up to 10 MB each.</span>
           </button>
-          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" class="visually-hidden" tabindex="-1">
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple class="visually-hidden" tabindex="-1">
 
-          <div class="source" id="source-loaded" hidden>
-            <img class="source__thumb" id="source-thumb" alt="">
-            <div class="source__meta">
-              <div class="source__name" id="source-name"></div>
-              <div class="source__dims num" id="source-dims"></div>
-            </div>
-            <button class="btn-destructive on-sunken" type="button" id="source-remove">Remove</button>
-          </div>
+          <!-- One row per loaded photo. Each gets its own edit, so the run comes
+               back with one image per photo. -->
+          <div class="source-list" id="source-list"></div>
         </div>
 
         <!-- Prompt -->

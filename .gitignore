@@ -1,5 +1,9 @@
 # Never commit the key or the spend record.
+# .env.* covers backups and per-machine variants (.env.local, .env.bak, ...),
+# which is how a real key nearly got staged once.
 .env
+.env.*
+!.env.example
 usage.jsonl
 
 node_modules/
