@@ -29,10 +29,7 @@
     { value: '21:9',  label: '21:9' }
   ];
 
-  var RESOLUTIONS = [
-    { value: '1k', base: 1024 },
-    { value: '2k', base: 2048 }
-  ];
+  var RESOLUTIONS = ['1k', '2k'];
 
   var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   var ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -65,6 +62,7 @@
   var actionBtn = $('action'), actionReason = $('action-reason'),
       costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
   var runError = $('run-error');
+  var cancelRow = $('cancel-row'), cancelBtn = $('cancel-run');
   var results = $('results'), empty = $('empty');
   var lightbox = $('lightbox'), lbCount = $('lb-count'), lbMeta = $('lb-meta'),
       lbImage = $('lb-image'), lbPrompt = $('lb-prompt'), lbTime = $('lb-time'),
@@ -92,6 +90,7 @@
   var rateLimitTimer = null;
   var runTimer = null;
   var lightboxState = null;
+  var activeRun = null;
   var lastFocused = null;
   var seq = 0;
 
@@ -165,24 +164,35 @@
   // -------------------------------------------------------------------------
   // Shape and size. Sizes are shown as pixels, never as an API enum.
   //
-  // The pixel pair keeps roughly the resolution's pixel budget while matching the
-  // chosen ratio, rounded to a multiple of 64 — which is how 16:9 at 1k lands on
-  // 1344x768 and 4:5 on 896x1152.
+  // These are xAI's real output sizes, measured one image per combination on
+  // 4 September 2026. They are not derivable from a formula: 1:1 exactly doubles
+  // between 1k and 2k while 16:9 scales by 2.2, and the ratios are held exactly
+  // rather than a pixel budget. If xAI changes what it returns, re-measure —
+  // do not try to compute these.
   // -------------------------------------------------------------------------
-  function dimsFor(shape, base) {
-    if (shape === 'auto') return null;
-    var parts = String(shape).split(':');
-    var w = Number(parts[0]), h = Number(parts[1]);
-    if (!w || !h) return null;
-    var k = Math.sqrt(w / h);
-    var round64 = function (v) { return Math.max(64, Math.round(v / 64) * 64); };
-    return { w: round64(base * k), h: round64(base / k) };
+  var SIZE_TABLE = {
+    '1:1':  { '1k': [1024, 1024], '2k': [2048, 2048] },
+    '16:9': { '1k': [1280,  720], '2k': [2816, 1584] },
+    '9:16': { '1k': [ 720, 1280], '2k': [1584, 2816] },
+    '4:3':  { '1k': [1152,  864], '2k': [2368, 1776] },
+    '3:4':  { '1k': [ 864, 1152], '2k': [1776, 2368] },
+    '3:2':  { '1k': [1248,  832], '2k': [2496, 1664] },
+    '2:3':  { '1k': [ 832, 1248], '2k': [1664, 2496] },
+    '2:1':  { '1k': [1408,  704], '2k': [2912, 1456] },
+    '21:9': { '1k': [1568,  672], '2k': [3136, 1344] }
+  };
+
+  function dimsFor(shape, res) {
+    var row = SIZE_TABLE[shape];
+    return row && row[res] ? { w: row[res][0], h: row[res][1] } : null;
   }
 
-  function sizeLabel(shape, base) {
-    var d = dimsFor(shape, base);
-    // With no shape chosen the model picks the frame, so only the budget is known.
-    return d ? d.w + '×' + d.h : base + ' px';
+  function sizeLabel(shape, res) {
+    var d = dimsFor(shape, res);
+    if (d) return d.w + '×' + d.h;
+    // On "auto" the model picks the shape, so the pixels depend on what it
+    // chooses. Quote the budget it works to instead of inventing a pair.
+    return res === '2k' ? '≈4 MP' : '≈1 MP';
   }
 
   // Null for "auto": the model chooses the frame, so guessing a ratio would only
@@ -263,10 +273,10 @@
   }
 
   // Spend increments only on a completed run, never on a failure.
-  function addSpend(amount) {
+  function addSpend(amount, isNewRun) {
     if (typeof amount !== 'number' || !isFinite(amount)) return;
     spend.amount = Math.round((spend.amount + amount) * 1e6) / 1e6;
-    spend.runs += 1;
+    if (isNewRun) spend.runs += 1;
     writeStore(SPEND_KEY, spend);
     renderSpend();
   }
@@ -384,8 +394,8 @@
     sizeEl.innerHTML = '';
     RESOLUTIONS.forEach(function (r) {
       var opt = document.createElement('option');
-      opt.value = r.value;
-      opt.textContent = sizeLabel(state.shape, r.base);
+      opt.value = r;
+      opt.textContent = sizeLabel(state.shape, r);
       sizeEl.appendChild(opt);
     });
     sizeEl.value = state.resolution;
@@ -656,12 +666,36 @@
     });
   }
 
+  // Frames that came back, in slot order. Each carries its own frame number, so
+  // a run that lost frame 3 still labels the rest correctly.
+  function doneImages(run) {
+    var out = [];
+    run.frames.forEach(function (f) { if (f.image) out.push(f.image); });
+    return out;
+  }
+
+  function countText(run) {
+    var total = run.frames.length;
+    var got = doneImages(run).length;
+    var text;
+    if (run.status === 'running' || got === total) {
+      text = total + (total === 1 ? ' frame' : ' frames');
+    } else {
+      // Say plainly that some are missing rather than quoting the number asked for.
+      text = got + ' of ' + total + ' frames';
+    }
+    if (run.status !== 'running' && typeof run.cost === 'number' && run.cost > 0) {
+      text += ' · ' + money(run.cost);
+    }
+    return text;
+  }
+
   // Prefer the dimensions of the image that came back over the rail's estimate.
   function sizeChipText(run) {
     var shapeText = run.shape === 'auto' ? 'Auto' : run.shape;
-    var first = run.images && run.images[0];
+    var first = doneImages(run)[0];
     if (first && first.width) return shapeText + ' · ' + first.width + '×' + first.height;
-    return shapeText + ' · ' + sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024);
+    return shapeText + ' · ' + sizeLabel(run.shape, run.resolution);
   }
 
   function chipsFor(run) {
@@ -673,26 +707,15 @@
     // chips that describe a run which never happened.
     if (run.degraded) {
       chips.push('Settings dropped');
-      var dcount = run.mode === 'edit' ? 1 : run.images.length;
-      chips.push(dcount + (dcount === 1 ? ' frame' : ' frames') +
-        (typeof run.cost === 'number' ? ' · ' + money(run.cost) : ''));
+      chips.push(countText(run));
       return chips;
     }
 
     if (run.quality && acceptsQuality(run.model)) {
       chips.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     }
-    if (run.mode === 'edit') {
-      chips.push('Edit');
-    } else {
-      chips.push(sizeChipText(run));
-    }
-    var count = run.mode === 'edit' ? 1 : run.n;
-    var countText = count + (count === 1 ? ' frame' : ' frames');
-    if (run.status === 'done' && typeof run.cost === 'number') {
-      countText += ' · ' + money(run.cost);
-    }
-    chips.push(countText);
+    chips.push(run.mode === 'edit' ? 'Edit' : sizeChipText(run));
+    chips.push(countText(run));
     return chips;
   }
 
@@ -718,53 +741,99 @@
     head.appendChild(headline);
 
     var aside = el('div', 'run__aside');
+    var got = doneImages(run).length;
+
     if (run.status === 'running') {
+      // Frames arrive one at a time now, so the header can say how many are back.
+      var backNode = el('span', 'run__status num', got + ' of ' + run.frames.length + ' back');
+      backNode.dataset.backFor = run.id;
+      aside.appendChild(backNode);
       var elapsed = el('span', 'run__time num', 'Running ' + duration(Date.now() - run.startedAt));
       elapsed.dataset.elapsedFor = run.id;
       aside.appendChild(elapsed);
-    } else if (run.status === 'done') {
-      aside.appendChild(el('span', 'run__time num',
-        clockTime(new Date(run.finishedAt)) + ' · took ' + duration(run.finishedAt - run.startedAt)));
-      var dlAll = el('button', 'btn-text btn-text--13', run.images.length > 1 ? 'Download all' : 'Download');
-      dlAll.type = 'button';
-      dlAll.addEventListener('click', function () { downloadRun(run); });
-      aside.appendChild(dlAll);
     } else {
-      aside.appendChild(el('span', 'run__time num', 'Did not finish'));
+      var when = clockTime(new Date(run.finishedAt || run.startedAt));
+      var took = duration((run.finishedAt || Date.now()) - run.startedAt);
+      var timeText = run.status === 'cancelled'
+        ? 'Cancelled · kept ' + got + ' of ' + run.frames.length
+        : when + ' · took ' + took;
+      aside.appendChild(el('span', 'run__time num', timeText));
+      if (got > 0) {
+        var dlAll = el('button', 'btn-text btn-text--13', got > 1 ? 'Download all' : 'Download');
+        dlAll.type = 'button';
+        dlAll.addEventListener('click', function () { downloadRun(run); });
+        aside.appendChild(dlAll);
+      }
     }
     head.appendChild(aside);
     card.appendChild(head);
 
     var grid = el('div', 'run__grid');
-    var expected = run.status === 'running' ? (run.mode === 'edit' ? 1 : run.n) : run.images.length;
     var ratio = run.mode === 'edit' ? null : aspectRatioCss(run.shape);
-
-    for (var i = 0; i < expected; i++) {
+    run.frames.forEach(function (frame, i) {
       grid.appendChild(renderFrame(run, i, ratio));
-    }
+    });
     card.appendChild(grid);
     return card;
   }
 
+  function mkTextButton(text, fn) {
+    var b = el('button', 'btn-text', text);
+    b.type = 'button';
+    b.addEventListener('click', fn);
+    return b;
+  }
+
   function renderFrame(run, index, ratio) {
+    var frame = run.frames[index];
     var wrap = el('div', 'frame');
+    wrap.dataset.frameFor = run.id + ':' + index;
     var foot = el('div', 'frame__foot');
     var label = el('span', 'frame__label num', 'Frame ' + (index + 1));
     var actions = el('span', 'frame__actions');
 
-    if (run.status === 'running') {
-      // One placeholder per expected frame, so the batch size is visible before
-      // anything arrives. Sunken fill with a hairline — no shimmer sweep.
-      var ph = el('div', 'frame__placeholder', 'Rendering');
+    // Still waiting. Sunken fill with a hairline — no shimmer sweep. Only the
+    // frame actually being worked on pulses; the rest sit quiet as "Queued".
+    if (frame.status === 'running' || frame.status === 'queued') {
+      var running = frame.status === 'running';
+      var ph = el('div', running ? 'frame__placeholder' : 'frame__placeholder frame__placeholder--idle',
+        running ? 'Rendering' : '');
       if (ratio) ph.style.aspectRatio = ratio; else ph.style.minHeight = '240px';
       wrap.appendChild(ph);
       foot.appendChild(label);
-      foot.appendChild(el('span', 'frame__label num', 'In progress'));
+      foot.appendChild(el('span', 'frame__label num', running ? 'In progress' : 'Queued'));
       wrap.appendChild(foot);
       return wrap;
     }
 
-    var image = run.images[index];
+    // A single frame failed inside an otherwise good batch. Offer to retry just
+    // this one rather than making the whole run again.
+    if (frame.status === 'failed') {
+      var box = el('div', 'frame__failed');
+      if (ratio) box.style.aspectRatio = ratio; else box.style.minHeight = '240px';
+      var msg = el('span', null);
+      msg.appendChild(el('b', null, 'Frame ' + (index + 1) + ' failed'));
+      msg.appendChild(document.createTextNode(frame.error || 'The other frames arrived. Use Again to retry just this one.'));
+      box.appendChild(msg);
+      wrap.appendChild(box);
+      foot.appendChild(label);
+      actions.appendChild(mkTextButton('Again', function () { retryFrame(run, index); }));
+      foot.appendChild(actions);
+      wrap.appendChild(foot);
+      return wrap;
+    }
+
+    if (frame.status === 'cancelled') {
+      var cbox = el('div', 'frame__placeholder frame__placeholder--idle', '');
+      if (ratio) cbox.style.aspectRatio = ratio; else cbox.style.minHeight = '240px';
+      wrap.appendChild(cbox);
+      foot.appendChild(label);
+      foot.appendChild(el('span', 'frame__label num', 'Not started'));
+      wrap.appendChild(foot);
+      return wrap;
+    }
+
+    var image = frame.image;
     if (!image) return wrap;
 
     var btn = el('button', 'frame__button');
@@ -782,32 +851,45 @@
       if (image.width) return;
       image.width = img.naturalWidth;
       image.height = img.naturalHeight;
-      if (index === 0) {
-        var chip = wrap.closest('.run') && wrap.closest('.run').querySelector('[data-size-chip]');
-        if (chip) chip.textContent = sizeChipText(run);
-      }
+      var card = wrap.closest('.run');
+      var chip = card && card.querySelector('[data-size-chip]');
+      if (chip) chip.textContent = sizeChipText(run);
     });
     btn.appendChild(img);
-    btn.addEventListener('click', function () { openLightbox(run, index); });
+    btn.addEventListener('click', function () { openLightbox(run, image); });
     wrap.appendChild(btn);
 
     foot.appendChild(label);
-
-    var mk = function (text, fn) {
-      var b = el('button', 'btn-text', text);
-      b.type = 'button';
-      b.addEventListener('click', fn);
-      return b;
-    };
-    actions.appendChild(mk('Download', function () { downloadImage(run, index); }));
+    actions.appendChild(mkTextButton('Download', function () { downloadImage(run, image); }));
     actions.appendChild(el('span', 'frame__sep', '·'));
-    actions.appendChild(mk('Edit this', function () { editThis(run, index); }));
+    actions.appendChild(mkTextButton('Edit this', function () { editThis(run, image); }));
     actions.appendChild(el('span', 'frame__sep', '·'));
-    actions.appendChild(mk('Again', function () { again(run); }));
+    actions.appendChild(mkTextButton('Again', function () { again(run); }));
 
     foot.appendChild(actions);
     wrap.appendChild(foot);
     return wrap;
+  }
+
+  // Repaint one frame in place. The grid never reflows, so a frame landing does
+  // not move the ones already on screen.
+  function refreshFrame(run, index) {
+    var node = results.querySelector('[data-frame-for="' + run.id + ':' + index + '"]');
+    if (!node) return;
+    var ratio = run.mode === 'edit' ? null : aspectRatioCss(run.shape);
+    node.replaceWith(renderFrame(run, index, ratio));
+  }
+
+  function refreshRunHeader(run) {
+    var card = results.querySelector('[data-run-id="' + run.id + '"]');
+    if (!card) return;
+    var back = card.querySelector('[data-back-for="' + run.id + '"]');
+    if (back) back.textContent = doneImages(run).length + ' of ' + run.frames.length + ' back';
+    var chips = card.querySelectorAll('.chip');
+    var texts = chipsFor(run);
+    if (chips.length === texts.length) {
+      for (var i = 0; i < chips.length; i++) chips[i].textContent = texts[i];
+    }
   }
 
   function tickElapsed() {
@@ -825,28 +907,30 @@
     return String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'image';
   }
 
-  function downloadImage(run, index) {
-    var image = run.images[index];
+  function imageFileName(run, image) {
+    return slug(run.prompt) + '-frame-' + (image.frame || 1) + '.' + (image.ext || 'png');
+  }
+
+  function downloadImage(run, image) {
     if (!image) return;
     var a = document.createElement('a');
     a.href = image.src;
-    a.download = slug(run.prompt) + '-frame-' + (index + 1) + '.' + (image.ext || 'png');
+    a.download = imageFileName(run, image);
     document.body.appendChild(a);
     a.click();
     a.remove();
   }
 
   function downloadRun(run) {
-    run.images.forEach(function (_, i) {
-      setTimeout(function () { downloadImage(run, i); }, i * 150);
+    doneImages(run).forEach(function (image, i) {
+      setTimeout(function () { downloadImage(run, image); }, i * 150);
     });
   }
 
   // -------------------------------------------------------------------------
   // Edit this / Again
   // -------------------------------------------------------------------------
-  function editThis(run, index) {
-    var image = run.images[index];
+  function editThis(run, image) {
     if (!image) return;
     closeLightbox();
 
@@ -859,7 +943,7 @@
     // Chaining matters: the source may itself be the output of an edit.
     state.source = {
       dataUri: image.src,
-      name: slug(run.prompt) + '-frame-' + (index + 1) + '.' + (image.ext || 'png'),
+      name: imageFileName(run, image),
       size: image.bytes || 0,
       width: image.width || 0,
       height: image.height || 0
@@ -882,7 +966,7 @@
       quality: run.quality,
       shape: run.shape,
       resolution: run.resolution,
-      n: run.n,
+      n: run.frames ? run.frames.length : run.n,
       source: run.source || null
     });
   }
@@ -890,9 +974,14 @@
   // -------------------------------------------------------------------------
   // 08 Lightbox
   // -------------------------------------------------------------------------
-  function openLightbox(run, index) {
+  // Opens on an image, not a slot: a run can have gaps where frames failed, and
+  // the arrows should move through what actually arrived.
+  function openLightbox(run, image) {
+    var list = doneImages(run);
+    var pos = list.indexOf(image);
+    if (pos === -1) return;
     lastFocused = document.activeElement;
-    lightboxState = { run: run, index: index };
+    lightboxState = { run: run, list: list, index: pos };
     renderLightbox();
     lightbox.hidden = false;
     lbClose.focus();
@@ -901,11 +990,13 @@
 
   function renderLightbox() {
     if (!lightboxState) return;
-    var run = lightboxState.run, i = lightboxState.index;
-    var image = run.images[i];
+    var run = lightboxState.run;
+    var image = lightboxState.list[lightboxState.index];
     if (!image) return;
 
-    lbCount.textContent = 'Frame ' + (i + 1) + ' of ' + run.images.length;
+    // Names the frame's own number against the run total, so a partial run reads
+    // truthfully — "Frame 5 of 6" even when only three came back.
+    lbCount.textContent = 'Frame ' + (image.frame || 1) + ' of ' + run.frames.length;
     var p = priceEntry(run.model);
     var meta = [p ? p.label : run.model];
     if (run.quality && acceptsQuality(run.model)) {
@@ -913,7 +1004,7 @@
     }
     // Real dimensions once the image has loaded; the rail estimate only until then.
     if (image.width) meta.push(image.width + '×' + image.height);
-    else if (run.mode !== 'edit') meta.push(sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024));
+    else if (run.mode !== 'edit') meta.push(sizeLabel(run.shape, run.resolution));
     lbMeta.textContent = meta.join(' · ');
 
     lbImage.src = image.src;
@@ -942,7 +1033,7 @@
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       if (!lightboxState) return;
       e.preventDefault();
-      var n = lightboxState.run.images.length;
+      var n = lightboxState.list.length;
       var step = e.key === 'ArrowRight' ? 1 : -1;
       lightboxState.index = (lightboxState.index + step + n) % n;
       renderLightbox();
@@ -968,10 +1059,10 @@
     if (e.target === lightbox) closeLightbox();
   });
   lbDownload.addEventListener('click', function () {
-    if (lightboxState) downloadImage(lightboxState.run, lightboxState.index);
+    if (lightboxState) downloadImage(lightboxState.run, lightboxState.list[lightboxState.index]);
   });
   lbEdit.addEventListener('click', function () {
-    if (lightboxState) editThis(lightboxState.run, lightboxState.index);
+    if (lightboxState) editThis(lightboxState.run, lightboxState.list[lightboxState.index]);
   });
 
   // -------------------------------------------------------------------------
@@ -1007,40 +1098,177 @@
     actionBtn.disabled = on;
     actionBtn.classList.toggle('is-busy', on);
     if (on) {
-      actionBtn.innerHTML = '';
-      actionBtn.appendChild(el('span', 'pulse'));
-      actionBtn.appendChild(el('span', null, label));
+      setBusyLabel(label);
       actionReason.hidden = true;
       costLine.hidden = false;
-      costLabel.textContent = 'Charged on completion';
+      costLabel.textContent = 'Charged as frames arrive';
       var est = estimate();
       costValue.textContent = est ? money(est.total) : 'unknown';
       promptGuidance.textContent = 'Locked while a run is in flight.';
+      cancelRow.hidden = false;
     } else {
+      cancelRow.hidden = true;
       renderModeChrome();
       renderAction();
     }
+  }
+
+  function setBusyLabel(label) {
+    actionBtn.innerHTML = '';
+    actionBtn.appendChild(el('span', 'pulse'));
+    actionBtn.appendChild(el('span', null, label));
+  }
+
+  // Frames are requested one at a time, so the button can name the one being
+  // worked on rather than the batch.
+  function busyLabelFor(run) {
+    if (run.mode === 'edit') return 'Applying the edit';
+    var got = doneImages(run).length;
+    var total = run.frames.length;
+    return 'Generating frame ' + Math.min(got + 1, total) + ' of ' + total;
+  }
+
+  // Ask xAI for one image per request rather than one request for many.
+  //
+  // Inside a single request xAI works through `n` images one after another, so a
+  // six-frame batch takes six times as long as one and shows nothing until the
+  // last is done — and at 2k a full batch runs past the server's timeout, losing
+  // work that has almost certainly already been billed. One image per request
+  // keeps every call short, lets frames appear as they land, and confines a
+  // failure to the frame it happened to.
+  var FRAME_CONCURRENCY = 3;
+
+  function requestOneFrame(run, index) {
+    var body = {
+      mode: run.mode,
+      model: run.model,
+      prompt: run.prompt,
+      user: state.name || '',
+      runId: run.id
+    };
+    if (run.mode === 'edit') {
+      body.image = run.source;
+    } else {
+      body.n = 1;
+      body.aspect_ratio = run.shape;
+      body.resolution = run.resolution;
+    }
+    if (run.quality) body.quality = run.quality;
+
+    var headers = { 'content-type': 'application/json' };
+    if (password) headers['x-team-password'] = password;
+
+    var controller = new AbortController();
+    run.controllers.push(controller);
+
+    return fetch('/api/images', {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(body),
+      signal: controller.signal
+    }).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (payload) {
+        return { ok: res.ok, status: res.status, payload: payload };
+      });
+    });
+  }
+
+  function applyFrameResult(run, index, result) {
+    var frame = run.frames[index];
+    if (frame.status === 'cancelled') return;
+
+    if (!result.ok) {
+      var payload = result.payload;
+      if (result.status === 401 && payload && payload.code === 'unauthorized') {
+        run.authFailed = true;
+        frame.status = 'failed';
+        frame.error = '';
+        return;
+      }
+      if (payload && payload.code === 'rate_limited') run.rateLimit = payload.retryAfter || 30;
+      var described = describeFailure(payload, result.status);
+      frame.status = 'failed';
+      // Two lines everywhere else; inside a frame card there is only room for one.
+      frame.error = described[1] + '. Use Again to retry just this one.';
+      run.lastFailure = described;
+      refreshFrame(run, index);
+      refreshRunHeader(run);
+      return;
+    }
+
+    var item = (result.payload.images || [])[0];
+    if (!item) {
+      frame.status = 'failed';
+      frame.error = 'Nothing came back for this frame. Use Again to retry just this one.';
+      refreshFrame(run, index);
+      return;
+    }
+
+    var kind = item.b64 ? sniffImage(item.b64) : { mime: null, ext: 'png' };
+    frame.image = {
+      src: item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url,
+      ext: kind.ext,
+      bytes: item.b64 ? Math.round(item.b64.length * 0.75) : 0,
+      // Filled in from the image itself once it loads — the only truthful
+      // source for the dimensions xAI actually produced.
+      width: 0,
+      height: 0,
+      frame: index + 1,
+      revised_prompt: item.revised_prompt || null
+    };
+    frame.status = 'done';
+
+    var cost = typeof result.payload.cost === 'number' ? result.payload.cost : 0;
+    run.cost = (run.cost || 0) + cost;
+    // Money is spent the moment a frame arrives, so it is counted then. The run
+    // itself is only counted once, on its first frame.
+    addSpend(cost, !run.counted);
+    run.counted = true;
+    if (result.payload.degraded) run.degraded = true;
+
+    refreshFrame(run, index);
+    refreshRunHeader(run);
+    if (busy) setBusyLabel(busyLabelFor(run));
+  }
+
+  function cancelRun(run) {
+    if (!run || run.status !== 'running') return;
+    run.cancelled = true;
+    run.frames.forEach(function (f) {
+      if (f.status === 'queued') f.status = 'cancelled';
+    });
+    run.controllers.forEach(function (c) {
+      try { c.abort(); } catch (err) { /* already settled */ }
+    });
   }
 
   async function submitRun(settings) {
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
 
+    var total = settings.mode === 'edit' ? 1 : settings.n;
+    var frames = [];
+    for (var i = 0; i < total; i++) frames.push({ status: 'queued', image: null, error: null });
+
     var run = {
-      id: 'run-' + (++seq),
+      id: 'run-' + (++seq) + '-' + Date.now().toString(36),
       mode: settings.mode,
       model: settings.model,
       prompt: settings.prompt,
       quality: settings.quality,
       shape: settings.shape,
       resolution: settings.resolution,
-      n: settings.n,
+      n: total,
       source: settings.source,
-      images: [],
+      frames: frames,
+      controllers: [],
       status: 'running',
       startedAt: Date.now(),
       finishedAt: null,
-      cost: null
+      cost: 0,
+      counted: false,
+      cancelled: false,
+      degraded: false
     };
 
     clearError();
@@ -1049,98 +1277,127 @@
     if (runTimer) clearInterval(runTimer);
     runTimer = setInterval(tickElapsed, 1000);
 
-    var count = settings.mode === 'edit' ? 1 : settings.n;
-    setBusy(true, settings.mode === 'edit'
-      ? 'Applying the edit'
-      : 'Generating ' + count + (count === 1 ? ' frame' : ' frames'));
+    activeRun = run;
+    setBusy(true, busyLabelFor(run));
 
-    var body = {
-      mode: settings.mode,
-      model: settings.model,
-      prompt: settings.prompt,
-      user: state.name || ''
-    };
-    if (settings.mode === 'edit') {
-      body.image = settings.source;
-    } else {
-      body.n = settings.n;
-      body.aspect_ratio = settings.shape;
-      body.resolution = settings.resolution;
+    var next = 0;
+    async function worker() {
+      while (true) {
+        if (run.cancelled) return;
+        var index = next++;
+        if (index >= total) return;
+        var frame = run.frames[index];
+        if (frame.status === 'cancelled') continue;
+        frame.status = 'running';
+        refreshFrame(run, index);
+        try {
+          var result = await requestOneFrame(run, index);
+          applyFrameResult(run, index, result);
+        } catch (err) {
+          if (run.cancelled || (err && err.name === 'AbortError')) {
+            frame.status = 'cancelled';
+          } else {
+            frame.status = 'failed';
+            frame.error = 'Could not reach the studio server. Use Again to retry just this one.';
+            run.reachFailed = true;
+          }
+          refreshFrame(run, index);
+        }
+      }
     }
-    if (settings.quality) body.quality = settings.quality;
 
-    var headers = { 'content-type': 'application/json' };
-    if (password) headers['x-team-password'] = password;
+    var pool = [];
+    for (var w = 0; w < Math.min(FRAME_CONCURRENCY, total); w++) pool.push(worker());
 
     try {
-      var res = await fetch('/api/images', {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(body)
-      });
-
-      var payload = null;
-      try { payload = await res.json(); } catch (err) { payload = null; }
-
-      if (!res.ok) {
-        // A failed run is not kept as a card and is never charged.
-        runs = runs.filter(function (r) { return r !== run; });
-        renderRuns();
-
-        if (res.status === 401 && payload && payload.code === 'unauthorized') {
-          lockOut();
-          return;
-        }
-        var described = describeFailure(payload, res.status);
-        showError(described[1], described[2], described[0]);
-        if (payload && payload.code === 'rate_limited') {
-          startRateLimit(payload.retryAfter || 30);
-        }
-        return;
-      }
-
-      var images = (payload.images || []).map(function (item) {
-        var kind = item.b64 ? sniffImage(item.b64) : { mime: null, ext: 'png' };
-        return {
-          src: item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url,
-          ext: kind.ext,
-          bytes: item.b64 ? Math.round(item.b64.length * 0.75) : 0,
-          // Filled in from the image itself once it loads — the only truthful
-          // source for the dimensions xAI actually produced.
-          width: 0,
-          height: 0,
-          revised_prompt: item.revised_prompt || null
-        };
-      });
-
-      run.images = images;
-      run.status = 'done';
-      run.finishedAt = Date.now();
-      run.cost = typeof payload.cost === "number" ? payload.cost : null;
-      run.degraded = Boolean(payload.degraded);
-      if (run.cost != null) addSpend(run.cost);
-
-      renderRuns();
-
-      if (payload.degraded) {
-        showError('Run completed with fewer settings',
-          'xAI would not accept one of the optional settings, so the run was retried with just the prompt and frame count. Shape, size and quality were dropped for this run.',
-          'warning');
-      }
-    } catch (err) {
-      runs = runs.filter(function (r) { return r !== run; });
-      renderRuns();
-      showError('Could not reach the studio server',
-        'The request to this app’s own server failed (' + (err && err.message ? err.message : 'connection lost') +
-        '). Check the server is still running, then retry. Nothing was charged.',
-        'danger');
+      await Promise.all(pool);
     } finally {
+      run.status = run.cancelled ? 'cancelled' : 'done';
+      run.finishedAt = Date.now();
+      activeRun = null;
       // Restore the button in a finally, so a failure never leaves it stuck.
       setBusy(false);
       if (runTimer && !runs.some(function (r) { return r.status === 'running'; })) {
         clearInterval(runTimer);
         runTimer = null;
       }
+    }
+
+    var got = doneImages(run).length;
+
+    // Every frame failed: there is nothing to show, so the card goes and the
+    // error takes the rail as before.
+    if (got === 0 && !run.cancelled) {
+      runs = runs.filter(function (r) { return r !== run; });
+      renderRuns();
+      if (run.authFailed) { lockOut(); return; }
+      if (run.reachFailed) {
+        showError('Could not reach the studio server',
+          'The request to this app’s own server failed. Check the server is still running, then retry. Nothing was charged.',
+          'danger');
+      } else if (run.lastFailure) {
+        showError(run.lastFailure[1], run.lastFailure[2], run.lastFailure[0]);
+      }
+      if (run.rateLimit) startRateLimit(run.rateLimit);
+      return;
+    }
+
+    renderRuns();
+
+    if (run.cancelled) {
+      showError('Run cancelled',
+        got > 0
+          ? 'Stopped after ' + got + ' of ' + run.frames.length + ' frames. You were charged ' +
+            money(run.cost) + ' for the ' + (got === 1 ? 'one that arrived' : got + ' that arrived') + '.'
+          : 'Stopped before any frame arrived, so nothing was charged.',
+        'warning');
+      return;
+    }
+
+    if (got < run.frames.length) {
+      showError('Some frames did not arrive',
+        got + ' of ' + run.frames.length + ' came back and are in the run above. Use Again on a failed frame to retry just that one. You were charged ' +
+        money(run.cost) + ' for what arrived.',
+        'warning');
+      if (run.rateLimit) startRateLimit(run.rateLimit);
+      return;
+    }
+
+    if (run.degraded) {
+      showError('Run completed with fewer settings',
+        'xAI would not accept one of the optional settings, so it was retried with just the prompt. Shape, size and quality were dropped for this run.',
+        'warning');
+    }
+  }
+
+  // Retry one failed frame in place, without re-running the whole group.
+  async function retryFrame(run, index) {
+    if (busy) return;
+    var frame = run.frames[index];
+    if (!frame || frame.status === 'done') return;
+
+    run.controllers = [];
+    run.cancelled = false;
+    run.status = 'running';
+    frame.status = 'running';
+    frame.error = null;
+    refreshFrame(run, index);
+
+    activeRun = run;
+    setBusy(true, 'Retrying frame ' + (index + 1));
+    try {
+      var result = await requestOneFrame(run, index);
+      applyFrameResult(run, index, result);
+    } catch (err) {
+      frame.status = 'failed';
+      frame.error = 'Could not reach the studio server. Use Again to retry just this one.';
+      refreshFrame(run, index);
+    } finally {
+      run.status = 'done';
+      run.finishedAt = Date.now();
+      activeRun = null;
+      setBusy(false);
+      renderRuns();
     }
   }
 
@@ -1321,6 +1578,10 @@
       promptEl.focus();
       promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
     });
+  });
+
+  cancelBtn.addEventListener('click', function () {
+    if (activeRun) cancelRun(activeRun);
   });
 
   rail.addEventListener('submit', function (e) {

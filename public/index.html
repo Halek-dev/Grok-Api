@@ -173,9 +173,15 @@
           <span id="cost-label">Estimated cost</span>
           <strong id="cost-value">$0.00</strong>
         </div>
-        <!-- 10 Errors appear here, directly under the action button, at rail width -->
-        <div id="run-error" role="alert"></div>
+        <div class="cancel-row" id="cancel-row" hidden>
+          <button class="btn-destructive" type="button" id="cancel-run">Cancel run</button>
+        </div>
       </div>
+
+      <!-- 10 Errors appear directly under the action button, at rail width. They
+           sit outside the action block because that block pins to the viewport on
+           phones, where a long error has no room and would be cut off. -->
+      <div id="run-error" role="alert"></div>
     </form>
 
     <!-- 03 / 06 Results -->

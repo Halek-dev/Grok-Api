@@ -257,15 +257,20 @@ async function readUsage() {
   let total = 0;
   let today = 0;
   let images = 0;
+  // One press of the button can produce several lines, so count distinct runs
+  // rather than lines. Lines from before run ids existed each count as one.
+  const runIds = new Set();
+  let unGrouped = 0;
   for (const r of rows) {
     const cost = typeof r.cost === 'number' ? r.cost : 0;
     total += cost;
     images += typeof r.images === 'number' ? r.images : 0;
+    if (r.runId) runIds.add(r.runId); else unGrouped++;
     const t = Date.parse(r.timestamp);
     if (!Number.isNaN(t) && t >= startOfDay.getTime()) today += cost;
   }
   return {
-    runs: rows.length,
+    runs: runIds.size + unGrouped,
     images: images,
     total: Math.round(total * 1e6) / 1e6,
     today: Math.round(today * 1e6) / 1e6,
@@ -398,6 +403,10 @@ async function handleImages(req, res, body) {
   const model = String(input.model || '');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
   const user = typeof input.user === 'string' ? input.user.trim().slice(0, 80) : '';
+  // A run is one press of the button. The client asks for one image per request
+  // so frames arrive as they finish, which means several log lines share a run —
+  // this is what groups them back together when reading usage.jsonl.
+  const runId = typeof input.runId === 'string' ? input.runId.trim().slice(0, 40) : null;
 
   if (!PRICES[model]) {
     return fail(res, 400,
@@ -527,6 +536,7 @@ async function handleImages(req, res, body) {
 
   await appendUsage({
     timestamp: new Date().toISOString(),
+    runId: runId,
     user: user || null,
     mode: mode,
     model: model,

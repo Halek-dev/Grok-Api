@@ -595,7 +595,7 @@ button, input, textarea, select { font-family: inherit; }
 .notice--danger { background: var(--danger-wash); border: 1px solid var(--danger-hairline); }
 .notice--danger .notice__title { color: var(--danger); }
 
-.notice--run { margin-top: 12px; }
+.notice--run { margin-top: 0; }
 
 /* ==========================================================================
    07  Dropzone
@@ -676,6 +676,10 @@ button, input, textarea, select { font-family: inherit; }
 }
 .cost-line strong { color: var(--text); font-weight: 500; }
 
+.cancel-row { margin-top: 10px; text-align: center; }
+
+#run-error:empty { display: none; }
+
 @media (max-width: 560px) {
   .action-block {
     position: fixed;
@@ -686,9 +690,6 @@ button, input, textarea, select { font-family: inherit; }
     padding: 16px;
   }
   .action-block .btn-action { padding: 16px; }
-  /* The pinned bar carries the button and its price only. Anything longer —
-     a reason, an error — stays in the rail where it can breathe. */
-  .action-block .notice { display: none; }
   .rail > .rule:last-of-type { display: none; }
 }
 
@@ -857,6 +858,11 @@ button, input, textarea, select { font-family: inherit; }
   color: var(--muted);
   animation: ph 1.6s ease-in-out infinite;
 }
+
+/* Only the frame actually rendering pulses. Queued ones sit still. */
+.frame__placeholder--idle { animation: none; }
+
+.run__status { font-size: 13px; font-weight: 500; color: var(--structure); }
 
 .frame__failed {
   border-radius: var(--r-md);
