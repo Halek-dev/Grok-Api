@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imagine studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- ========== 01 Password gate ========== -->
+<div class="gate" id="gate" hidden>
+  <form class="gate__card on-page" id="gate-form" novalidate>
+    <h1 class="gate__title">Imagine studio</h1>
+    <p class="gate__sub">Shared team access. Ask in #design-ops if you need the password.</p>
+    <label class="label" for="gate-password">Team password</label>
+    <input class="input" type="password" id="gate-password" name="password"
+           placeholder="Enter password" autocomplete="current-password"
+           aria-describedby="gate-error">
+    <div class="field-error" id="gate-error" role="alert" hidden></div>
+    <button class="btn-action" type="submit" id="gate-submit" style="margin-top:20px">Unlock studio</button>
+  </form>
+</div>
+
+<!-- ========== The studio ========== -->
+<div id="app" hidden>
+
+  <!-- 02 Top bar -->
+  <header class="topbar">
+    <div class="topbar__brand">Imagine studio</div>
+    <div class="topbar__rule" aria-hidden="true"></div>
+    <div class="topbar__who">
+      <span id="name-label">Working as</span>
+      <input class="name-input" id="user-name" type="text" placeholder="Add your name"
+             aria-labelledby="name-label" autocomplete="name" maxlength="40">
+    </div>
+    <div class="topbar__spend">
+      <span class="topbar__spend-label">Spent today</span>
+      <span class="topbar__spend-amount num" id="spend-amount">$0.00</span>
+      <span class="topbar__spend-runs num" id="spend-runs" hidden></span>
+    </div>
+  </header>
+
+  <main class="studio">
+
+    <!-- 04 / 07 Rail. Order never changes: mode switch, prompt, model, quality,
+         shape and size, frames, action. -->
+    <form class="rail" id="rail" novalidate>
+
+      <div class="modeswitch" id="modeswitch" role="tablist" aria-label="What to do">
+        <button class="modeswitch__btn" type="button" role="tab" id="tab-generate"
+                data-mode="generate" aria-selected="true" aria-controls="rail-fields">Generate</button>
+        <button class="modeswitch__btn" type="button" role="tab" id="tab-edit"
+                data-mode="edit" aria-selected="false" aria-controls="rail-fields" tabindex="-1">Edit a photo</button>
+      </div>
+
+      <div id="rail-fields" style="display:contents">
+
+        <!-- Photo to edit — edit mode only -->
+        <div class="field" id="source-field" hidden>
+          <span class="label" id="source-label">Photo to edit</span>
+
+          <button class="dropzone on-sunken" type="button" id="dropzone" aria-describedby="source-label">
+            <span class="dropzone__title" id="dropzone-title">Drop a photo here</span>
+            <span class="dropzone__body" id="dropzone-body">Or <span class="dropzone__link">choose a file</span>. JPG, PNG or WebP, up to 10 MB.</span>
+          </button>
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" class="visually-hidden" tabindex="-1">
+
+          <div class="source" id="source-loaded" hidden>
+            <img class="source__thumb" id="source-thumb" alt="">
+            <div class="source__meta">
+              <div class="source__name" id="source-name"></div>
+              <div class="source__dims num" id="source-dims"></div>
+            </div>
+            <button class="btn-destructive on-sunken" type="button" id="source-remove">Remove</button>
+          </div>
+        </div>
+
+        <!-- Prompt -->
+        <div class="field">
+          <label class="label" for="prompt" id="prompt-label">What should it make?</label>
+          <textarea class="textarea textarea--generate" id="prompt" maxlength="1000"
+                    placeholder="Describe the image — subject, setting, light, mood"
+                    aria-describedby="prompt-hint"></textarea>
+          <div class="hint-row" id="prompt-hint">
+            <span id="prompt-guidance">Plain description works better than keywords.</span>
+            <span class="num" id="prompt-count">0 / 1000</span>
+          </div>
+        </div>
+
+        <!-- Model -->
+        <div class="field">
+          <label class="label" for="model">Model</label>
+          <div class="select-shell on-sunken">
+            <select id="model"></select>
+            <span class="select-note" id="model-note" hidden></span>
+            <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+              <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <!-- 09 Retirement notice — sits with the choice it belongs to. Never a
+               modal, never a top-of-page banner, no close control. -->
+          <div id="retirement" hidden></div>
+        </div>
+
+        <!-- Quality — only for models that accept it -->
+        <div class="field" id="quality-field" hidden>
+          <label class="label" for="quality">Quality</label>
+          <div class="select-shell on-sunken">
+            <select id="quality">
+              <option value="auto">Auto</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+            </select>
+            <span class="select-note num" id="quality-note"></span>
+            <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+              <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="hint" id="quality-hint">Higher quality costs more and takes longer.</div>
+        </div>
+
+        <!-- Shape and size — generate mode only -->
+        <div class="row-2" id="shape-size">
+          <div class="field">
+            <label class="label" for="shape">Shape</label>
+            <div class="select-shell on-sunken">
+              <select id="shape" class="num"></select>
+              <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+                <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+          </div>
+          <div class="field">
+            <label class="label" for="size">Size</label>
+            <div class="select-shell on-sunken">
+              <select id="size" class="num"></select>
+              <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+                <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Frames — removed, not disabled, in edit mode: an edit returns one image -->
+        <div class="field" id="frames-field">
+          <div class="slider-head">
+            <label for="frames">Frames</label>
+            <span class="slider-value num is-idle" id="frames-value">1 frame</span>
+          </div>
+          <input class="slider on-surface" type="range" id="frames" min="1" max="10" step="1" value="1">
+          <div class="slider-scale num" aria-hidden="true"><span>1</span><span>10</span></div>
+        </div>
+
+        <!-- Working as — moves here from the top bar on phones -->
+        <div class="field" id="mobile-who" hidden>
+          <label class="label" for="user-name-mobile">Working as</label>
+          <input class="input" id="user-name-mobile" type="text" placeholder="Add your name"
+                 autocomplete="name" maxlength="40">
+        </div>
+
+      </div>
+
+      <hr class="rule">
+
+      <div class="action-block">
+        <button class="btn-action" type="submit" id="action">Generate</button>
+        <div class="hint" id="action-reason">Write a prompt to start. Nothing is charged until you generate.</div>
+        <div class="cost-line num" id="cost-line" hidden>
+          <span id="cost-label">Estimated cost</span>
+          <strong id="cost-value">$0.00</strong>
+        </div>
+        <!-- 10 Errors appear here, directly under the action button, at rail width -->
+        <div id="run-error" role="alert"></div>
+      </div>
+    </form>
+
+    <!-- 03 / 06 Results -->
+    <section class="results" id="results" aria-live="polite" aria-label="Runs">
+      <div class="empty" id="empty">
+        <div class="empty__swatches" aria-hidden="true">
+          <span style="background:#E3E8E4"></span>
+          <span style="background:#EDE6E2"></span>
+          <span style="background:#D9E2DE"></span>
+        </div>
+        <div>
+          <h2 class="empty__title">Your first run goes here</h2>
+          <p class="empty__body">Describe an image in the rail and generate up to ten frames at once. Every run stays on this page so you can compare them side by side.</p>
+        </div>
+        <div class="empty__seeds">
+          <div class="empty__seeds-label" id="seeds-label">Or start from one of these</div>
+          <button class="seed on-surface" type="button" data-seed="Flat-lay of autumn produce on unbleached linen, window light">
+            <span class="seed__text">Flat-lay of autumn produce on unbleached linen, window light</span>
+            <span class="seed__cta">Use this prompt</span>
+          </button>
+          <button class="seed on-surface" type="button" data-seed="Empty studio corner, one chair, late afternoon shadow">
+            <span class="seed__text">Empty studio corner, one chair, late afternoon shadow</span>
+            <span class="seed__cta">Use this prompt</span>
+          </button>
+          <button class="seed on-surface" type="button" data-seed="Close crop of hand-thrown ceramic glaze, matte finish">
+            <span class="seed__text">Close crop of hand-thrown ceramic glaze, matte finish</span>
+            <span class="seed__cta">Use this prompt</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 08 Lightbox -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Frame viewer" hidden>
+  <div class="lightbox__bar">
+    <span class="lightbox__count num" id="lb-count"></span>
+    <span class="lightbox__meta num" id="lb-meta"></span>
+    <div class="lightbox__tools">
+      <button class="lb-btn lb-btn--primary" type="button" id="lb-download">Download</button>
+      <button class="lb-btn" type="button" id="lb-edit">Edit this</button>
+      <button class="lb-btn" type="button" id="lb-close">Close</button>
+    </div>
+  </div>
+  <div class="lightbox__stage"><img id="lb-image" alt=""></div>
+  <div class="lightbox__caption">
+    <p id="lb-prompt"></p>
+    <span class="num" id="lb-time"></span>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

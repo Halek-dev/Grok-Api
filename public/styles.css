@@ -1,0 +1,977 @@
+/* ==========================================================================
+   Imagine studio
+   Five colours, one family, one scale. Nothing else is allowed in.
+   ========================================================================== */
+
+:root {
+  --page:       #F2F4F2;
+  --surface:    #FFFFFF;
+  --sunken:     #F7F9F8;
+  --border:     #DCE2DE;
+  --text:       #17332C;
+  --muted:      #6B7C75;
+  --structure:  #17403A;
+  --action:     #E0A093;
+  --on-action:  #5C2B20;
+  --warning:    #A85742;
+  --danger:     #A3372D;
+
+  /* The only permitted transparencies, all over surface. */
+  --pine-wash:      rgba(23, 64, 58, 0.06);
+  --pine-hairline:  rgba(23, 64, 58, 0.28);
+  --warning-wash:     rgba(168, 87, 66, 0.07);
+  --warning-hairline: rgba(168, 87, 66, 0.32);
+  --danger-wash:      rgba(163, 55, 45, 0.06);
+  --danger-hairline:  rgba(163, 55, 45, 0.32);
+  --action-hover:   #D89486;
+  --action-active:  #CE8A7C;
+
+  --r-sm: 6px;   /* chips, thumbs */
+  --r-md: 10px;  /* fields, buttons, images */
+  --r-lg: 14px;  /* rail, cards, bars */
+
+  --font: 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          system-ui, Roboto, Helvetica, Arial, sans-serif;
+  --t: 120ms ease-out;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Prices, counts, sizes, timestamps and day counts are always tabular. */
+.num { font-variant-numeric: tabular-nums; }
+
+button, input, textarea, select { font-family: inherit; }
+
+/* Focus ring — pine double box-shadow, :focus-visible only. Never outline:auto,
+   and never remove an outline without replacing it. */
+:focus { outline: none; }
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring-bg, var(--surface)), 0 0 0 4px var(--structure);
+}
+.on-sunken { --ring-bg: var(--sunken); }
+.on-page   { --ring-bg: var(--page); }
+
+/* Three animations exist in the whole product. This is one of them. */
+@keyframes ph {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[hidden] { display: none !important; }
+
+/* ==========================================================================
+   01  Password gate
+   ========================================================================== */
+
+.gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.gate__card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 32px;
+}
+
+.gate__title { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+
+.gate__sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 560px) {
+  .gate__card { padding: 24px; }
+  .gate__sub { margin-bottom: 20px; }
+}
+
+/* ==========================================================================
+   02  Top bar — height 64, surface, hairline underneath, sticky
+   ========================================================================== */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: 64px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.topbar__brand { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.topbar__rule  { width: 1px; height: 24px; background: var(--border); flex: 0 0 auto; }
+
+.topbar__who { display: flex; align-items: center; gap: 10px; }
+.topbar__who > span { font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+/* Spend is the rightmost thing on the screen and always visible. It stays text,
+   never a badge or pill. */
+.topbar__spend {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+.topbar__spend-label  { font-size: 13px; color: var(--muted); }
+.topbar__spend-amount { font-size: 15px; font-weight: 600; }
+.topbar__spend-runs   { font-size: 12px; color: var(--muted); }
+
+@media (max-width: 900px) {
+  .topbar { padding: 0 20px; gap: 16px; }
+  .name-input { width: 140px; }
+}
+
+/* On phones the top bar drops the name field — it moves to the bottom of the
+   rail — and keeps spend, because spend is the one thing nobody should hunt for. */
+@media (max-width: 560px) {
+  .topbar { height: 56px; padding: 0 16px; gap: 12px; }
+  .topbar__rule, .topbar__who, .topbar__spend-label, .topbar__spend-runs { display: none; }
+  .topbar__spend { gap: 0; }
+}
+
+/* ==========================================================================
+   03  Layout — rail 340 fixed sticky at 80, results fluid
+   ========================================================================== */
+
+.studio {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+  align-items: flex-start;
+}
+
+.rail {
+  flex: 0 0 340px;
+  width: 340px;
+  position: sticky;
+  top: 80px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  /* A sticky element taller than the viewport would strand its own bottom —
+     the action button, the cost line and any error — with no way to scroll to
+     it. Cap it to the visible height and let it scroll inside instead. */
+  max-height: calc(100vh - 80px - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.results { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
+
+/* Below 900 the columns stack with the rail first and lose their sticky. */
+@media (max-width: 900px) {
+  .studio { flex-direction: column; padding: 20px; }
+  /* Stacked, the rail loses its sticky and its height cap with it. */
+  .rail {
+    position: static;
+    flex: 1 1 auto;
+    width: 100%;
+    max-height: none;
+    overflow-y: visible;
+  }
+  .results { width: 100%; }
+}
+
+/* Below 560 the gutter drops to 16 and the action bar pins to the viewport. */
+@media (max-width: 560px) {
+  .studio { padding: 16px; gap: 16px; }
+  .rail { padding: 16px; gap: 16px; border-radius: var(--r-lg); }
+  body.has-pinned-action { padding-bottom: 116px; }
+}
+
+/* ==========================================================================
+   Form primitives
+   ========================================================================== */
+
+.field { display: block; }
+
+.label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.hint-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Text input and textarea */
+.input,
+.textarea {
+  width: 100%;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  transition: background var(--t), border-color var(--t), color var(--t);
+}
+.input::placeholder,
+.textarea::placeholder { color: var(--muted); }
+
+/* focus — fill lifts to surface, border goes pine */
+.input:focus-visible,
+.textarea:focus-visible {
+  background: var(--surface);
+  border-color: var(--structure);
+}
+
+.input:disabled,
+.textarea:disabled {
+  background: var(--page);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.input.is-error,
+.textarea.is-error { border-color: var(--danger); }
+
+.textarea { resize: vertical; min-height: 96px; }
+.textarea--generate { height: 118px; }
+.textarea--edit { height: 96px; }
+
+.name-input {
+  width: 180px;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 7px 11px;
+  font-size: 13px;
+  color: var(--text);
+  transition: background var(--t), border-color var(--t);
+}
+.name-input::placeholder { color: var(--muted); }
+.name-input:focus-visible { background: var(--surface); border-color: var(--structure); }
+
+.field-error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+  margin-top: 6px;
+}
+
+/* Select — native element under a designed shell, so the option list stays the
+   platform one and keyboard behaviour is free. */
+.select-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: background var(--t), border-color var(--t);
+}
+.select-shell:hover { border-color: var(--structure); }
+.select-shell:hover .select-chevron path { stroke: var(--structure); }
+
+.select-shell:has(select:focus-visible) {
+  background: var(--surface);
+  border-color: var(--structure);
+  box-shadow: 0 0 0 2px var(--ring-bg, var(--surface)), 0 0 0 4px var(--structure);
+}
+.select-shell:has(select:focus-visible) .select-chevron path { stroke: var(--structure); }
+
+.select-shell:has(select:disabled) {
+  background: var(--page);
+  color: var(--muted);
+}
+
+.select-shell select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-md);
+  padding: 11px 13px;
+  padding-right: 34px;
+  font-size: 15px;
+  color: inherit;
+  width: 100%;
+  cursor: pointer;
+}
+.select-shell select:disabled { cursor: not-allowed; color: var(--muted); }
+.select-shell select:focus-visible { box-shadow: none; }
+
+/* A price or note sitting inside the select shell, right-aligned before the
+   chevron, per the design. It must not swallow the click. */
+.select-note {
+  position: absolute;
+  right: 32px;
+  font-size: 12px;
+  color: var(--muted);
+  pointer-events: none;
+  background: inherit;
+  padding-left: 6px;
+}
+
+.select-chevron {
+  position: absolute;
+  right: 13px;
+  pointer-events: none;
+}
+.select-chevron path { transition: stroke var(--t); }
+
+/* Mode switch */
+.modeswitch {
+  display: flex;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 3px;
+  gap: 3px;
+}
+.modeswitch:has(:focus-visible) {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--structure);
+}
+.modeswitch.is-disabled { opacity: 0.6; }
+
+.modeswitch__btn {
+  flex: 1;
+  text-align: center;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t), color var(--t);
+}
+.modeswitch__btn:focus-visible { box-shadow: none; }
+.modeswitch__btn:hover:not([aria-selected='true']) { background: var(--surface); color: var(--text); }
+.modeswitch__btn[aria-selected='true'] { background: var(--structure); color: var(--surface); }
+.modeswitch__btn:disabled { cursor: not-allowed; }
+
+@media (max-width: 560px) {
+  .modeswitch__btn { padding: 11px; font-size: 14px; }
+}
+
+/* Frames slider */
+.slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+.slider-head label { font-size: 13px; font-weight: 500; }
+.slider-value { font-size: 13px; color: var(--text); }
+.slider-value.is-idle { color: var(--muted); }
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  /* A 44px hit area on touch, with the same 18px thumb. */
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--structure) 0 var(--fill, 0%), var(--border) var(--fill, 0%) 100%);
+}
+.slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--border); }
+.slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--structure); }
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 9px;
+  background: var(--surface);
+  border: 1px solid var(--structure);
+  margin-top: -7px;
+  transition: width var(--t), height var(--t), background var(--t), border-color var(--t);
+}
+.slider::-moz-range-thumb {
+  width: 16px; height: 16px;
+  border-radius: 9px;
+  background: var(--surface);
+  border: 1px solid var(--structure);
+}
+.slider:active::-webkit-slider-thumb { background: var(--structure); }
+.slider:active::-moz-range-thumb { background: var(--structure); }
+
+.slider:disabled { cursor: not-allowed; opacity: 0.6; }
+.slider:disabled::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, var(--muted) 0 var(--fill, 0%), var(--border) var(--fill, 0%) 100%);
+}
+.slider:disabled::-webkit-slider-thumb { background: var(--sunken); border-color: var(--muted); }
+.slider:disabled::-moz-range-thumb { background: var(--sunken); border-color: var(--muted); }
+
+.slider-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .slider { height: 44px; }
+  .slider::-webkit-slider-thumb { margin-top: -7px; }
+}
+
+.rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+
+.row-2 { display: flex; gap: 12px; }
+.row-2 > * { flex: 1; min-width: 0; }
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+
+/* Action button — blush, the only one on screen. */
+.btn-action {
+  width: 100%;
+  font: 600 15px/1 var(--font);
+  background: var(--action);
+  color: var(--on-action);
+  border: 1px solid rgba(92, 43, 32, 0.14);
+  border-radius: var(--r-md);
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: background var(--t), border-color var(--t), color var(--t);
+}
+.btn-action:hover:not(:disabled) { background: var(--action-hover); }
+.btn-action:active:not(:disabled) { background: var(--action-active); border-color: rgba(92, 43, 32, 0.22); }
+
+/* Disabled action = sunken fill, muted text, hairline border, and a reason
+   underneath. Never a blush button that does nothing. */
+.btn-action:disabled {
+  background: var(--sunken);
+  color: var(--muted);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+
+/* busy — pine border, live label, dark text */
+.btn-action.is-busy:disabled {
+  color: var(--text);
+  border-color: var(--structure);
+  cursor: progress;
+}
+.btn-action .pulse {
+  width: 8px; height: 8px;
+  border-radius: 4px;
+  background: var(--structure);
+  animation: ph 1.2s ease-in-out infinite;
+  flex: 0 0 auto;
+}
+
+/* Quiet button — Download, Download all */
+.btn-quiet {
+  font: 500 13px/1 var(--font);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t), color var(--t);
+}
+.btn-quiet:hover:not(:disabled) { background: var(--sunken); color: var(--structure); border-color: var(--structure); }
+.btn-quiet:active:not(:disabled) { background: var(--structure); color: var(--surface); border-color: var(--structure); }
+.btn-quiet:disabled { background: var(--sunken); color: var(--muted); cursor: not-allowed; }
+
+/* Inline text action — Download · Edit this · Again, Use this prompt */
+.btn-text {
+  font: 500 12px/1.4 var(--font);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  padding: 0;
+  color: var(--structure);
+  cursor: pointer;
+  border-radius: 2px;
+  transition: border-color var(--t), color var(--t);
+}
+.btn-text:hover { border-bottom-color: var(--structure); }
+.btn-text:focus-visible { border-radius: 3px; }
+
+.btn-text--13 { font-size: 13px; }
+
+/* Destructive text button — Remove */
+.btn-destructive {
+  font: 500 13px/1.4 var(--font);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  padding: 2px 4px;
+  color: var(--warning);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--t), border-color var(--t);
+}
+.btn-destructive:hover { color: var(--danger); border-bottom-color: var(--danger); }
+.btn-destructive:disabled { color: var(--muted); cursor: not-allowed; }
+
+/* ==========================================================================
+   Notices — warning clears on its own, danger needs a person
+   ========================================================================== */
+
+.notice {
+  border-radius: var(--r-md);
+  padding: 12px;
+  margin-top: 8px;
+}
+.notice__title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.notice__body  { font-size: 12px; line-height: 1.55; color: var(--text); }
+
+.notice--warning { background: var(--warning-wash); border: 1px solid var(--warning-hairline); }
+.notice--warning .notice__title { color: var(--warning); }
+
+.notice--danger { background: var(--danger-wash); border: 1px solid var(--danger-hairline); }
+.notice--danger .notice__title { color: var(--danger); }
+
+.notice--run { margin-top: 12px; }
+
+/* ==========================================================================
+   07  Dropzone
+   ========================================================================== */
+
+.dropzone {
+  width: 100%;
+  display: block;
+  background: var(--sunken);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  padding: 28px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t), color var(--t);
+  font-family: inherit;
+  color: inherit;
+}
+.dropzone__title { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.dropzone__body  { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.dropzone__link  { color: var(--structure); font-weight: 500; border-bottom: 1px solid var(--pine-hairline); }
+
+.dropzone.is-over {
+  background: var(--pine-wash);
+  border-color: var(--structure);
+}
+.dropzone.is-over .dropzone__title { color: var(--structure); }
+
+/* Rejection replaces the dropzone body and stays until the next drop or file
+   choice — it is not a toast. */
+.dropzone.is-rejected {
+  background: var(--danger-wash);
+  border-color: var(--danger);
+}
+.dropzone.is-rejected .dropzone__title { color: var(--danger); }
+.dropzone.is-rejected .dropzone__body  { color: var(--text); }
+
+.source {
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.source__thumb {
+  width: 56px; height: 56px;
+  border-radius: var(--r-sm);
+  background: var(--page);
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+  object-fit: cover;
+}
+.source__meta { min-width: 0; flex: 1; }
+.source__name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source__dims { font-size: 12px; color: var(--muted); }
+
+/* ==========================================================================
+   Action block — pins to the bottom of the viewport under 560
+   ========================================================================== */
+
+.action-block { display: flex; flex-direction: column; }
+
+.cost-line {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cost-line strong { color: var(--text); font-weight: 500; }
+
+@media (max-width: 560px) {
+  .action-block {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 40;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 16px;
+  }
+  .action-block .btn-action { padding: 16px; }
+  /* The pinned bar carries the button and its price only. Anything longer —
+     a reason, an error — stays in the rail where it can breathe. */
+  .action-block .notice { display: none; }
+  .rail > .rule:last-of-type { display: none; }
+}
+
+/* ==========================================================================
+   Results — empty state
+   ========================================================================== */
+
+.empty {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 72px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  min-height: 620px;
+  justify-content: center;
+  text-align: center;
+}
+.empty__swatches { display: flex; gap: 12px; }
+.empty__swatches span {
+  width: 96px; height: 64px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+}
+.empty__title {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+.empty__body {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--muted);
+  text-wrap: pretty;
+  max-width: 420px;
+}
+.empty__seeds {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 12px;
+  text-align: left;
+}
+.empty__seeds-label { font-size: 12px; color: var(--muted); }
+
+.seed {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background var(--t), border-color var(--t);
+}
+.seed:hover { border-color: var(--structure); }
+.seed__text { font-size: 14px; color: var(--text); }
+.seed__cta  { font-size: 13px; font-weight: 500; color: var(--structure); white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .empty { padding: 48px 20px; min-height: 0; }
+  .empty__swatches span { width: 72px; height: 48px; }
+  .empty__title { font-size: 20px; }
+  .seed { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+/* ==========================================================================
+   06  Run cards
+   ========================================================================== */
+
+.run {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px;
+}
+
+.run__head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.run__headline { min-width: 0; flex: 1; }
+.run__prompt {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run__chips { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.chip {
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.run__aside {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  text-align: right;
+}
+.run__time { font-size: 12px; color: var(--muted); }
+.run__status { font-size: 13px; font-weight: 500; color: var(--structure); }
+
+.run__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+@media (max-width: 900px) { .run__grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) {
+  .run { padding: 16px; }
+  .run__grid { grid-template-columns: 1fr; }
+  .run__head { flex-direction: column; gap: 12px; }
+  .run__aside { text-align: left; }
+  .run__prompt { white-space: normal; font-size: 14px; line-height: 1.45; }
+}
+
+/* Image card */
+.frame__button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: border-color var(--t);
+}
+.frame__button:hover { border-color: var(--structure); }
+.frame__button img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Images appear with no transition — they are the content, not an effect. */
+}
+
+.frame__placeholder {
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+  animation: ph 1.6s ease-in-out infinite;
+}
+
+.frame__failed {
+  border-radius: var(--r-md);
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.frame__failed b { display: block; font-weight: 600; color: var(--danger); margin-bottom: 4px; }
+
+.frame__foot {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.frame__label { font-size: 12px; color: var(--muted); }
+.frame__actions { display: flex; gap: 10px; align-items: baseline; }
+.frame__sep { color: var(--border); font-size: 12px; }
+
+/* On phones the three image actions become 44px-tall bordered buttons — the
+   desktop text row is too small to hit. */
+@media (max-width: 560px) {
+  .frame__foot { margin-top: 10px; align-items: center; }
+  .frame__actions { margin-left: auto; gap: 8px; }
+  .frame__sep { display: none; }
+  .frame__actions .btn-text {
+    font-size: 13px;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 0 13px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface);
+  }
+  .frame__actions .btn-text:hover { border-color: var(--structure); color: var(--structure); }
+}
+
+/* ==========================================================================
+   08  Lightbox — the only shadow in the product is this scrim
+   ========================================================================== */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(23, 64, 58, 0.92);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  gap: 16px;
+  animation: lb-in 100ms ease-out;
+}
+@keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+
+.lightbox__bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.lightbox__count { font-size: 13px; color: #FFFFFF; font-weight: 500; }
+.lightbox__meta  { font-size: 12px; color: rgba(255, 255, 255, 0.7); }
+.lightbox__tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+.lb-btn {
+  font: 500 13px/1 var(--font);
+  border-radius: var(--r-md);
+  padding: 8px 14px;
+  cursor: pointer;
+  background: transparent;
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  transition: background var(--t), color var(--t), border-color var(--t);
+}
+.lb-btn:hover { border-color: #FFFFFF; }
+.lb-btn:focus-visible { box-shadow: 0 0 0 2px rgba(23, 64, 58, 0.92), 0 0 0 4px #FFFFFF; }
+.lb-btn--primary { background: #FFFFFF; color: var(--text); border-color: #FFFFFF; }
+.lb-btn--primary:hover { background: #F2F4F2; }
+
+.lightbox__stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.lightbox__stage img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--r-md);
+  object-fit: contain;
+}
+
+.lightbox__caption { text-align: center; max-width: 760px; margin: 0 auto; }
+.lightbox__caption p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #FFFFFF;
+  text-wrap: pretty;
+  margin: 0;
+}
+.lightbox__caption span {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 6px;
+}
+
+@media (max-width: 560px) {
+  .lightbox { padding: 16px; }
+  .lightbox__tools { width: 100%; margin-left: 0; }
+  .lb-btn { flex: 1; text-align: center; padding: 12px 10px; }
+}

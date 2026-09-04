@@ -1,0 +1,8 @@
+# Never commit the key or the spend record.
+.env
+usage.jsonl
+
+node_modules/
+npm-debug.log*
+.DS_Store
+Thumbs.db
