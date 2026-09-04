@@ -181,18 +181,49 @@ Every generated image is written to `DATA_DIR/images` under a random name like
 to which run, so opening the app rebuilds the recent runs into the results column
 exactly as they looked.
 
-Two endpoints back this:
+The endpoints behind it:
 
-- `GET /api/runs?limit=20` — recent runs and the ids of their images. **Requires
-  the team password.** Ids that have since been pruned are filtered out, so the
-  page is never handed a link that will 404.
-- `GET /api/image/<id>` — the bytes. **Does not require the password**, because a
-  browser cannot attach a header to an `<img src>`. The id is a 128-bit random
-  value and the listing above is the only way to learn one, so knowing an id is
-  what grants access. Treat an image URL as shareable with anyone.
+| | |
+|---|---|
+| `GET /api/runs?limit=20` | recent runs and their image ids — **password required** |
+| `GET /api/image/<id>` | the bytes — **no password**, see below |
+| `DELETE /api/image/<id>` | delete one — **password required** |
+| `POST /api/images/delete` | `{ids:[…]}`, up to 200 — **password required** |
+| `POST /api/favourite` | `{id, favourite:true\|false}` — **password required** |
 
-Storage is capped by `MAX_STORED_IMAGES` (default 400) and the oldest are deleted
-first. A 2k PNG is around 6 MB, so the default ceiling is roughly 2.5 GB.
+Reading an image needs no password because a browser cannot attach a header to
+an `<img src>`. The id is a 128-bit random value and the password-protected
+listing is the only way to learn one, so **the id is the access grant — treat an
+image URL as shareable with anyone.** Everything that *changes* something does
+require the password.
+
+Ids whose file has been pruned or deleted are filtered out of the listing, so the
+page is never handed a link that will 404.
+
+### Favourites and deleting
+
+Each image has a **Favourite** toggle and a **Delete** action, and a checkbox for
+selecting several at once. With anything selected, a bar appears above the runs
+offering Download, Delete and Clear selection.
+
+Deleting cannot be undone, so the button asks a second time in place — it becomes
+"Delete for good?" (or "Delete 3 permanently?") for four seconds. There is no
+modal and no toast, which is consistent with the rest of the product.
+
+Two things worth knowing:
+
+- **Favourites are never pruned**, and they are not counted against
+  `MAX_STORED_IMAGES` either — so marking a lot of images cannot quietly stop new
+  ones being kept. That is what favouriting is *for*: protecting something from
+  the automatic clear-out.
+- **Deleting removes the picture, not the spend record.** The money was spent
+  whether or not you kept the result, so `usage.jsonl` and "Spent today" are
+  unchanged by a delete. Generate six and delete three and the ledger still says
+  you paid for six — which is the honest answer.
+
+Storage is capped by `MAX_STORED_IMAGES` (default 400) and the oldest
+non-favourites are deleted first. A 2k PNG is around 6 MB, so the default ceiling
+is roughly 2.5 GB; most 1k output is 200–400 KB, so realistically far less.
 
 To turn the whole thing off, set `SAVE_IMAGES=false`; the app then behaves as it
 originally did, with results living in the browser tab only.

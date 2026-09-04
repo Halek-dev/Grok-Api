@@ -926,6 +926,88 @@ button, input, textarea, select { font-family: inherit; }
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Select and favourite sit in the footer, not on the image. The design is
+   explicit that hover reveals nothing new and the picture is the content, so
+   nothing is laid over it. */
+.frame__meta {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.frame__meta + .frame__foot { margin-top: 6px; }
+
+.frame__select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.frame__select:hover { border-color: var(--structure); }
+.frame__select:checked {
+  background: var(--structure);
+  border-color: var(--structure);
+  /* Tick drawn in the surface colour, no extra asset. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2l2.3 2.3 4.7-4.7' fill='none' stroke='%23FFFFFF' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 12px 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.frame__fav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  font: 500 12px/1.4 var(--font);
+  cursor: pointer;
+  transition: color var(--t);
+}
+.frame__fav:hover { color: var(--structure); }
+.frame__fav[aria-pressed='true'] { color: var(--structure); }
+.frame__fav svg { flex: 0 0 auto; }
+.frame__fav[aria-pressed='true'] svg { fill: var(--structure); }
+
+/* Destructive inline action, matching the design's Remove treatment. */
+.btn-text--danger { color: var(--warning); }
+.btn-text--danger:hover { color: var(--danger); border-bottom-color: var(--danger); }
+.btn-text--confirm { color: var(--danger); border-bottom-color: var(--danger); }
+
+/* Appears only while something is selected. */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--structure);
+  border-radius: var(--r-lg);
+  padding: 14px 20px;
+}
+.selection-bar__count { font-size: 13px; font-weight: 500; }
+.selection-bar__actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+
+@media (max-width: 560px) {
+  .selection-bar { flex-wrap: wrap; gap: 12px; padding: 14px 16px; }
+  .selection-bar__actions { margin-left: 0; width: 100%; }
+  /* Tap targets are never under 44px. */
+  .frame__select { width: 22px; height: 22px; }
+  .frame__meta { gap: 12px; min-height: 44px; }
+  .frame__fav { min-height: 44px; padding: 0 8px; }
+  .selection-bar .btn-text { min-height: 44px; display: inline-flex; align-items: center; }
+}
 .frame__label { font-size: 12px; color: var(--muted); }
 .frame__actions { display: flex; gap: 10px; align-items: baseline; }
 .frame__sep { color: var(--border); font-size: 12px; }
@@ -934,7 +1016,10 @@ button, input, textarea, select { font-family: inherit; }
    desktop text row is too small to hit. */
 @media (max-width: 560px) {
   .frame__foot { margin-top: 10px; align-items: center; }
-  .frame__actions { margin-left: auto; gap: 8px; }
+  /* Four actions do not fit one line at 375, so let the row wrap rather than
+     letting the labels break inside their own buttons. */
+  .frame__actions { margin-left: auto; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .frame__actions .btn-text { white-space: nowrap; }
   .frame__sep { display: none; }
   .frame__actions .btn-text {
     font-size: 13px;

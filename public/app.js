@@ -723,13 +723,21 @@
   // Runs
   // -------------------------------------------------------------------------
   function renderRuns() {
-    // Results persist newest-first until cleared. A refresh empties the sheet.
     empty.hidden = runs.length > 0;
     Array.prototype.slice.call(results.querySelectorAll('.run')).forEach(function (n) { n.remove(); });
+
+    // Forget anything selected that is no longer on the page, so the count in
+    // the bar can never claim more than exists.
+    var live = {};
+    runs.forEach(function (run) {
+      run.frames.forEach(function (f) { if (f.image && f.image.id) live[f.image.id] = true; });
+    });
+    Array.from(selected).forEach(function (id) { if (!live[id]) selected.delete(id); });
 
     runs.forEach(function (run) {
       results.insertBefore(renderRun(run), empty);
     });
+    renderSelectionBar();
   }
 
   // Frames that came back, in slot order. Each carries its own frame number, so
@@ -854,6 +862,165 @@
     return card;
   }
 
+  // -------------------------------------------------------------------------
+  // Selecting, favouriting, deleting
+  //
+  // Deletion cannot be undone, so the button asks a second time in place rather
+  // than opening a dialog — the design has no modals and no toasts.
+  // -------------------------------------------------------------------------
+  var selected = new Set();
+  var CONFIRM_MS = 4000;
+
+  function authHeaders(extra) {
+    var h = extra || {};
+    if (password) h['x-team-password'] = password;
+    return h;
+  }
+
+  // A frame can only be favourited or deleted if the server kept a copy of it.
+  function isStored(image) {
+    return Boolean(image && image.id);
+  }
+
+  function armConfirm(btn, label, confirmLabel, onConfirm) {
+    var armed = false;
+    var timer = null;
+    function disarm() {
+      armed = false;
+      btn.textContent = label;
+      btn.classList.remove('btn-text--confirm');
+      if (timer) { clearTimeout(timer); timer = null; }
+    }
+    btn.addEventListener('click', function () {
+      if (armed) {
+        disarm();
+        onConfirm();
+        return;
+      }
+      armed = true;
+      btn.textContent = confirmLabel;
+      btn.classList.add('btn-text--confirm');
+      timer = setTimeout(disarm, CONFIRM_MS);
+    });
+    btn.addEventListener('blur', disarm);
+    return btn;
+  }
+
+  async function toggleFavourite(image, on) {
+    if (!isStored(image)) return false;
+    try {
+      var res = await fetch('/api/favourite', {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ id: image.id, favourite: on })
+      });
+      if (res.status === 401) { lockOut(); return false; }
+      if (!res.ok) throw new Error('failed');
+      image.favourite = on;
+      return true;
+    } catch (err) {
+      showError('Could not save that favourite',
+        'The server did not accept the change. Check it is still running, then try again.',
+        'warning');
+      return false;
+    }
+  }
+
+  // Drop images from the in-memory runs once the server has really deleted them.
+  function forgetImages(ids) {
+    var gone = {};
+    ids.forEach(function (id) { gone[id] = true; selected.delete(id); });
+    runs.forEach(function (run) {
+      run.frames.forEach(function (f) {
+        if (f.image && gone[f.image.id]) {
+          f.image = null;
+          f.status = 'deleted';
+        }
+      });
+    });
+    // A run with nothing left in it is not worth a card.
+    runs = runs.filter(function (run) {
+      return run.status === 'running' || run.frames.some(function (f) {
+        return f.image || f.status === 'failed';
+      });
+    });
+    renderRuns();
+  }
+
+  async function deleteImages(ids) {
+    var real = ids.filter(Boolean);
+    if (!real.length) return;
+    try {
+      var res = await fetch('/api/images/delete', {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ ids: real })
+      });
+      if (res.status === 401) { lockOut(); return; }
+      var payload = await res.json().catch(function () { return null; });
+      if (!res.ok) {
+        showError('Could not delete',
+          (payload && payload.error) || 'The server refused the request. Try again.',
+          'danger');
+        return;
+      }
+      // Treat missing files as gone too — the goal was for them not to be there.
+      forgetImages((payload.deleted || []).concat(payload.missing || []));
+      clearError();
+    } catch (err) {
+      showError('Could not reach the studio server',
+        'Nothing was deleted. Check the server is still running, then try again.',
+        'danger');
+    }
+  }
+
+  function renderSelectionBar() {
+    var existing = results.querySelector('.selection-bar');
+    if (!selected.size) {
+      if (existing) existing.remove();
+      return;
+    }
+    var bar = existing || el('div', 'selection-bar');
+    bar.innerHTML = '';
+    bar.appendChild(el('span', 'selection-bar__count num',
+      selected.size + (selected.size === 1 ? ' image selected' : ' images selected')));
+
+    var actions = el('div', 'selection-bar__actions');
+
+    var dl = el('button', 'btn-text btn-text--13', 'Download');
+    dl.type = 'button';
+    dl.addEventListener('click', function () {
+      var i = 0;
+      runs.forEach(function (run) {
+        run.frames.forEach(function (f) {
+          if (f.image && selected.has(f.image.id)) {
+            var img = f.image, r = run, delay = i++ * 150;
+            setTimeout(function () { downloadImage(r, img); }, delay);
+          }
+        });
+      });
+    });
+    actions.appendChild(dl);
+
+    var del = el('button', 'btn-text btn-text--13 btn-text--danger', 'Delete');
+    del.type = 'button';
+    armConfirm(del, 'Delete',
+      'Delete ' + selected.size + ' permanently?',
+      function () { deleteImages(Array.from(selected)); });
+    actions.appendChild(del);
+
+    var clear = el('button', 'btn-text btn-text--13', 'Clear selection');
+    clear.type = 'button';
+    clear.addEventListener('click', function () {
+      selected.clear();
+      renderRuns();
+    });
+    actions.appendChild(clear);
+
+    bar.appendChild(actions);
+    if (!existing) results.insertBefore(bar, results.firstChild);
+  }
+
   function mkTextButton(text, fn) {
     var b = el('button', 'btn-text', text);
     b.type = 'button';
@@ -900,6 +1067,16 @@
       return wrap;
     }
 
+    if (frame.status === 'deleted') {
+      var dbox = el('div', 'frame__placeholder frame__placeholder--idle', '');
+      if (ratio) dbox.style.aspectRatio = ratio; else dbox.style.minHeight = '240px';
+      wrap.appendChild(dbox);
+      foot.appendChild(label);
+      foot.appendChild(el('span', 'frame__label num', 'Deleted'));
+      wrap.appendChild(foot);
+      return wrap;
+    }
+
     if (frame.status === 'cancelled') {
       var cbox = el('div', 'frame__placeholder frame__placeholder--idle', '');
       if (ratio) cbox.style.aspectRatio = ratio; else cbox.style.minHeight = '240px';
@@ -936,12 +1113,60 @@
     btn.addEventListener('click', function () { openLightbox(run, image); });
     wrap.appendChild(btn);
 
-    foot.appendChild(label);
+    // Select and favourite live on their own line above the actions, so the
+    // action row stays readable at the grid's 240px minimum column.
+    if (isStored(image)) {
+      var meta = el('div', 'frame__meta');
+
+      var box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'frame__select';
+      box.checked = selected.has(image.id);
+      box.setAttribute('aria-label', 'Select frame ' + (index + 1));
+      box.addEventListener('change', function () {
+        if (box.checked) selected.add(image.id); else selected.delete(image.id);
+        renderSelectionBar();
+      });
+      meta.appendChild(box);
+      meta.appendChild(label);
+
+      var fav = el('button', 'frame__fav');
+      fav.type = 'button';
+      var on = Boolean(image.favourite);
+      fav.setAttribute('aria-pressed', String(on));
+      fav.setAttribute('aria-label', (on ? 'Remove frame ' : 'Favourite frame ') + (index + 1) + (on ? ' from favourites' : ''));
+      fav.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
+        '<path d="M7 1.6l1.65 3.35 3.7.54-2.68 2.6.63 3.68L7 10.03l-3.3 1.74.63-3.68L1.65 5.49l3.7-.54z" ' +
+        'stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+      fav.appendChild(el('span', null, on ? 'Favourite' : 'Favourite'));
+      fav.addEventListener('click', async function () {
+        var next = fav.getAttribute('aria-pressed') !== 'true';
+        if (await toggleFavourite(image, next)) {
+          fav.setAttribute('aria-pressed', String(next));
+          fav.setAttribute('aria-label', (next ? 'Remove frame ' : 'Favourite frame ') + (index + 1) + (next ? ' from favourites' : ''));
+        }
+      });
+      meta.appendChild(fav);
+      wrap.appendChild(meta);
+    } else {
+      foot.appendChild(label);
+    }
+
     actions.appendChild(mkTextButton('Download', function () { downloadImage(run, image); }));
     actions.appendChild(el('span', 'frame__sep', '·'));
     actions.appendChild(mkTextButton('Edit this', function () { editThis(run, image); }));
     actions.appendChild(el('span', 'frame__sep', '·'));
     actions.appendChild(mkTextButton('Again', function () { again(run); }));
+
+    if (isStored(image)) {
+      actions.appendChild(el('span', 'frame__sep', '·'));
+      var del = el('button', 'btn-text btn-text--danger', 'Delete');
+      del.type = 'button';
+      armConfirm(del, 'Delete', 'Delete for good?', function () {
+        deleteImages([image.id]);
+      });
+      actions.appendChild(del);
+    }
 
     foot.appendChild(actions);
     wrap.appendChild(foot);
@@ -1865,6 +2090,7 @@
               ext: (img.id.split('.').pop() || 'png'),
               bytes: 0, width: 0, height: 0,
               frame: img.frame,
+              favourite: Boolean(img.favourite),
               revised_prompt: null
             }
           };

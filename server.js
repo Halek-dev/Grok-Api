@@ -349,7 +349,35 @@ async function saveImage(b64) {
   }
 }
 
+// Favourites are a flat set of image ids. Small enough to rewrite whole, and a
+// team this size will not race on it meaningfully.
+const FAV_FILE = () => path.join(DATA_DIR, 'favourites.json');
+
+async function readFavourites() {
+  try {
+    const raw = await fsp.readFile(FAV_FILE(), 'utf8');
+    const list = JSON.parse(raw);
+    return new Set(Array.isArray(list) ? list.filter(validImageId) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function writeFavourites(set) {
+  try {
+    await fsp.writeFile(FAV_FILE(), JSON.stringify(Array.from(set)), 'utf8');
+    return true;
+  } catch (err) {
+    console.error('[favourites] could not write: ' + err.message);
+    return false;
+  }
+}
+
 // Keep the newest MAX_STORED_IMAGES and delete the rest.
+//
+// Favourites are never pruned — that is what favouriting is for. They are also
+// not counted against the cap, so marking a lot of images cannot quietly stop
+// new ones being kept.
 async function pruneImages() {
   if (!SAVE_IMAGES || !MAX_STORED_IMAGES) return;
   let names;
@@ -358,9 +386,12 @@ async function pruneImages() {
   } catch {
     return;
   }
-  if (names.length <= MAX_STORED_IMAGES) return;
+  const favourites = await readFavourites();
+  const candidates = names.filter((n) => !favourites.has(n));
+  if (candidates.length <= MAX_STORED_IMAGES) return;
+
   const stats = [];
-  for (const name of names) {
+  for (const name of candidates) {
     try {
       const st = await fsp.stat(path.join(IMAGE_DIR, name));
       if (st.isFile()) stats.push({ name: name, at: st.mtimeMs });
@@ -372,6 +403,32 @@ async function pruneImages() {
       await fsp.unlink(path.join(IMAGE_DIR, old.name));
     } catch { /* already gone */ }
   }
+}
+
+// Deleting removes the file and the favourite mark, but never the usage log
+// line: the money was spent whether or not the picture is still here, and the
+// spend record has to stay honest.
+async function deleteImages(ids) {
+  const wanted = (Array.isArray(ids) ? ids : []).filter(validImageId);
+  const deleted = [];
+  const missing = [];
+  for (const id of wanted) {
+    const resolved = path.resolve(path.join(IMAGE_DIR, id));
+    if (!resolved.startsWith(IMAGE_DIR + path.sep)) continue;
+    try {
+      await fsp.unlink(resolved);
+      deleted.push(id);
+    } catch {
+      missing.push(id);
+    }
+  }
+  if (deleted.length) {
+    const favourites = await readFavourites();
+    let touched = false;
+    for (const id of deleted) if (favourites.delete(id)) touched = true;
+    if (touched) await writeFavourites(favourites);
+  }
+  return { deleted: deleted, missing: missing, rejected: wanted.length !== (Array.isArray(ids) ? ids.length : 0) };
 }
 
 // An id is exactly what saveImage produces: 32 hex characters, a dot, a known
@@ -406,6 +463,7 @@ async function serveSavedImage(res, id) {
 // Rebuild recent runs from the log so the results survive a refresh. Lines from
 // one press of the button share a runId and are folded back into one run.
 async function readRuns(limit) {
+  const favourites = await readFavourites();
   let raw;
   try {
     raw = await fsp.readFile(USAGE_LOG, 'utf8');
@@ -445,7 +503,9 @@ async function readRuns(limit) {
     run.cost = Math.round((run.cost + (r.cost || 0)) * 1e6) / 1e6;
     if (r.timestamp > run.timestamp) run.timestamp = r.timestamp;
     for (const f of r.files) {
-      if (f && validImageId(f.id)) run.images.push({ id: f.id, frame: f.frame || run.images.length + 1 });
+      if (f && validImageId(f.id)) {
+        run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id) });
+      }
     }
   }
 
@@ -842,8 +902,10 @@ const server = http.createServer(async function (req, res) {
     // Fetching one saved image by its random id needs no password, because an
     // <img src> cannot send a header. The id is the capability; the listing that
     // hands out ids is behind the password, just below.
-    if (urlPath.startsWith('/api/image/')) {
-      if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/image/.');
+    // Reading one saved image by its random id needs no password, because an
+    // <img src> cannot send a header. Anything that CHANGES something falls
+    // through to the authenticated block below.
+    if (urlPath.startsWith('/api/image/') && req.method === 'GET') {
       if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
       return serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/image/'.length)));
     }
@@ -856,6 +918,70 @@ const server = http.createServer(async function (req, res) {
       if (urlPath === '/api/usage') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/usage.');
         return sendJson(res, 200, await readUsage());
+      }
+
+      // Delete one saved image. The usage log line stays: the money was spent
+      // whether or not the picture is still here.
+      if (urlPath.startsWith('/api/image/')) {
+        if (req.method !== 'DELETE') return fail(res, 405, 'Use GET to read an image, or DELETE to remove it.');
+        if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+        const id = decodeURIComponent(urlPath.slice('/api/image/'.length));
+        if (!validImageId(id)) return fail(res, 400, 'Not a valid image id.');
+        const result = await deleteImages([id]);
+        if (!result.deleted.length) return fail(res, 404, 'That image is no longer stored.');
+        return sendJson(res, 200, { deleted: result.deleted });
+      }
+
+      // Delete several at once, so a selection is one action and one undo-less
+      // decision rather than a dozen.
+      if (urlPath === '/api/images/delete') {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for /api/images/delete.');
+        if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+        let body;
+        try {
+          body = JSON.parse(await readBody(req, 1024 * 1024) || '{}');
+        } catch {
+          return fail(res, 400, 'The request body was not valid JSON.');
+        }
+        if (!Array.isArray(body.ids) || !body.ids.length) {
+          return fail(res, 400, 'Send an ids array naming the images to delete.');
+        }
+        if (body.ids.length > 200) return fail(res, 400, 'Delete at most 200 images at a time.');
+        const result = await deleteImages(body.ids);
+        return sendJson(res, 200, { deleted: result.deleted, missing: result.missing });
+      }
+
+      // Mark or unmark a favourite. Favourites are exempt from pruning, which is
+      // the point of them.
+      if (urlPath === '/api/favourite') {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for /api/favourite.');
+        if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+        let body;
+        try {
+          body = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        } catch {
+          return fail(res, 400, 'The request body was not valid JSON.');
+        }
+        const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+        const wanted = ids.filter(validImageId);
+        if (!wanted.length) return fail(res, 400, 'Send an id, or an ids array.');
+        const on = body.favourite !== false;
+        const favourites = await readFavourites();
+        for (const id of wanted) {
+          if (on) {
+            // Only mark something that is actually still on disk.
+            try {
+              await fsp.access(path.join(IMAGE_DIR, id));
+              favourites.add(id);
+            } catch { /* gone; nothing to favourite */ }
+          } else {
+            favourites.delete(id);
+          }
+        }
+        if (!(await writeFavourites(favourites))) {
+          return fail(res, 500, 'Could not save the favourite. The images folder may not be writable.');
+        }
+        return sendJson(res, 200, { favourites: wanted.filter((id) => favourites.has(id)) });
       }
 
       // Recent runs with the ids of their saved images, newest first. This is
