@@ -33,7 +33,9 @@ const crypto = require('node:crypto');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const USAGE_LOG = path.join(ROOT, 'usage.jsonl');
+
+// DATA_DIR, USAGE_LOG and IMAGE_DIR are set once the .env parser exists, below.
+let DATA_DIR, USAGE_LOG, IMAGE_DIR;
 
 const MAX_BODY_BYTES = 40 * 1024 * 1024; // base64 source images are large
 const PROMPT_LOG_CHARS = 300;
@@ -127,6 +129,27 @@ const TEAM_PASSWORD = String(env('TEAM_PASSWORD', '')).trim();
 const PORT = Number(env('PORT', 8787));
 const HOST = String(env('HOST', '0.0.0.0'));
 const UPSTREAM_TIMEOUT_MS = Number(env('UPSTREAM_TIMEOUT_MS', 180000));
+
+// Where generated images and the spend log are kept. On a host with an ephemeral
+// filesystem — Railway, Fly, most container platforms — point DATA_DIR at a
+// mounted volume, or every redeploy silently throws both away.
+DATA_DIR = path.resolve(String(env('DATA_DIR', ROOT)));
+USAGE_LOG = path.join(DATA_DIR, 'usage.jsonl');
+IMAGE_DIR = path.join(DATA_DIR, 'images');
+
+// Saving is what makes a run survive a refresh. Turn it off and the app behaves
+// as it did before: results live in the browser tab only.
+const SAVE_IMAGES = String(env('SAVE_IMAGES', 'true')).toLowerCase() !== 'false';
+
+// Oldest images are pruned past this, so a volume cannot fill up unattended.
+// A 2k PNG is around 6 MB, so 400 images is roughly 2.5 GB at worst.
+const MAX_STORED_IMAGES = Math.max(0, Number(env('MAX_STORED_IMAGES', 400)) || 0);
+
+try {
+  if (SAVE_IMAGES) fs.mkdirSync(IMAGE_DIR, { recursive: true });
+} catch (err) {
+  console.error('[images] could not create ' + IMAGE_DIR + ': ' + err.message);
+}
 // Only override this to route through a gateway, or to point the proxy at a
 // stub while testing. It must speak the same API as api.x.ai.
 const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+$/, '');
@@ -289,6 +312,162 @@ async function readUsage() {
     today: Math.round(today * 1e6) / 1e6,
     recent: rows.slice(-25).reverse()
   };
+}
+
+// ---------------------------------------------------------------------------
+// Saved images
+//
+// Each image is written under a random id, so the id itself is the capability
+// that grants access. Listing them requires the team password; fetching one by
+// id does not, because an <img src> cannot carry an auth header. A 128-bit
+// random name is not guessable, and the list is the only way to learn one.
+// ---------------------------------------------------------------------------
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' };
+
+// Read the format from the bytes: xAI returns JPEG at 1k and PNG at 2k, and the
+// request does not say which.
+function sniffBuffer(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG') return 'png';
+  if (buf.length > 3 && buf[0] === 0xFF && buf[1] === 0xD8) return 'jpg';
+  if (buf.length > 12 && buf.slice(0, 4).toString('latin1') === 'RIFF' &&
+      buf.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return 'png';
+}
+
+async function saveImage(b64) {
+  if (!SAVE_IMAGES || !b64) return null;
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    const ext = sniffBuffer(buf);
+    const id = crypto.randomBytes(16).toString('hex') + '.' + ext;
+    await fsp.writeFile(path.join(IMAGE_DIR, id), buf);
+    return { id: id, bytes: buf.length };
+  } catch (err) {
+    console.error('[images] could not save: ' + err.message);
+    return null;
+  }
+}
+
+// Keep the newest MAX_STORED_IMAGES and delete the rest.
+async function pruneImages() {
+  if (!SAVE_IMAGES || !MAX_STORED_IMAGES) return;
+  let names;
+  try {
+    names = await fsp.readdir(IMAGE_DIR);
+  } catch {
+    return;
+  }
+  if (names.length <= MAX_STORED_IMAGES) return;
+  const stats = [];
+  for (const name of names) {
+    try {
+      const st = await fsp.stat(path.join(IMAGE_DIR, name));
+      if (st.isFile()) stats.push({ name: name, at: st.mtimeMs });
+    } catch { /* vanished between readdir and stat */ }
+  }
+  stats.sort((a, b) => b.at - a.at);
+  for (const old of stats.slice(MAX_STORED_IMAGES)) {
+    try {
+      await fsp.unlink(path.join(IMAGE_DIR, old.name));
+    } catch { /* already gone */ }
+  }
+}
+
+// An id is exactly what saveImage produces: 32 hex characters, a dot, a known
+// extension. Anything else never reaches the filesystem.
+function validImageId(id) {
+  return typeof id === 'string' && /^[0-9a-f]{32}\.(png|jpg|webp)$/.test(id);
+}
+
+async function serveSavedImage(res, id) {
+  if (!validImageId(id)) return fail(res, 400, 'Not a valid image id.');
+  const file = path.join(IMAGE_DIR, id);
+  // Belt and braces: the pattern above already forbids separators, but resolve
+  // and check anyway so the guard does not rest on one regex.
+  const resolved = path.resolve(file);
+  if (!resolved.startsWith(IMAGE_DIR + path.sep)) return fail(res, 403, 'Forbidden.');
+
+  let stat;
+  try {
+    stat = await fsp.stat(resolved);
+  } catch {
+    return fail(res, 404, 'That image is no longer stored.');
+  }
+  res.writeHead(200, {
+    'content-type': EXT_MIME[id.split('.').pop()] || 'application/octet-stream',
+    'content-length': stat.size,
+    // Immutable: the id never points at different bytes.
+    'cache-control': 'private, max-age=31536000, immutable'
+  });
+  fs.createReadStream(resolved).pipe(res);
+}
+
+// Rebuild recent runs from the log so the results survive a refresh. Lines from
+// one press of the button share a runId and are folded back into one run.
+async function readRuns(limit) {
+  let raw;
+  try {
+    raw = await fsp.readFile(USAGE_LOG, 'utf8');
+  } catch {
+    return [];
+  }
+  const order = [];
+  const byRun = new Map();
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let r;
+    try {
+      r = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(r.files) || !r.files.length) continue; // nothing to show
+    const key = r.runId || r.timestamp;
+    if (!byRun.has(key)) {
+      byRun.set(key, {
+        id: key,
+        timestamp: r.timestamp,
+        user: r.user || null,
+        mode: r.mode,
+        model: r.model,
+        quality: r.quality,
+        resolution: r.resolution,
+        aspect_ratio: r.aspect_ratio,
+        prompt: r.prompt,
+        cost: 0,
+        images: []
+      });
+      order.push(key);
+    }
+    const run = byRun.get(key);
+    run.cost = Math.round((run.cost + (r.cost || 0)) * 1e6) / 1e6;
+    if (r.timestamp > run.timestamp) run.timestamp = r.timestamp;
+    for (const f of r.files) {
+      if (f && validImageId(f.id)) run.images.push({ id: f.id, frame: f.frame || run.images.length + 1 });
+    }
+  }
+
+  const runs = order.map((k) => byRun.get(k)).reverse().slice(0, limit);
+
+  // Drop anything whose file has since been pruned, so the client is never sent
+  // an id that will 404.
+  const alive = [];
+  for (const run of runs) {
+    const kept = [];
+    for (const img of run.images) {
+      try {
+        await fsp.access(path.join(IMAGE_DIR, img.id));
+        kept.push(img);
+      } catch { /* pruned */ }
+    }
+    if (kept.length) {
+      run.images = kept.sort((a, b) => a.frame - b.frame);
+      alive.push(run);
+    }
+  }
+  return alive;
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +701,8 @@ async function handleImages(req, res, body) {
     return {
       b64: typeof item.b64_json === 'string' ? item.b64_json : null,
       url: typeof item.url === 'string' ? item.url : null,
-      revised_prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : null
+      revised_prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : null,
+      id: null
     };
   }).filter(function (img) {
     return img.b64 || img.url;
@@ -547,9 +727,23 @@ async function handleImages(req, res, body) {
     count: images.length
   });
 
+  // Save the bytes before answering, so a refresh can bring the run back. A
+  // failure to write is logged but never fails the request — the user has
+  // already paid for these images and must still receive them.
+  const saved = [];
+  for (let i = 0; i < images.length; i++) {
+    const rec = await saveImage(images[i].b64);
+    if (rec) {
+      images[i].id = rec.id;
+      saved.push({ id: rec.id, frame: typeof input.frame === 'number' ? input.frame : i + 1 });
+    }
+  }
+  pruneImages().catch(function () { /* pruning is housekeeping, never fatal */ });
+
   await appendUsage({
     timestamp: new Date().toISOString(),
     runId: runId,
+    files: saved,
     user: user || null,
     mode: mode,
     model: model,
@@ -562,7 +756,13 @@ async function handleImages(req, res, body) {
     prompt: prompt.slice(0, PROMPT_LOG_CHARS)
   });
 
-  sendJson(res, 200, { images: images, cost: cost, degraded: degraded });
+  sendJson(res, 200, {
+    images: images.map(function (i) {
+      return { b64: i.b64, url: i.url, revised_prompt: i.revised_prompt, id: i.id || null };
+    }),
+    cost: cost,
+    degraded: degraded
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -634,8 +834,18 @@ const server = http.createServer(async function (req, res) {
         hasKey: Boolean(XAI_API_KEY),
         requiresPassword: Boolean(TEAM_PASSWORD),
         prices: PRICES,
-        qualityModels: QUALITY_MODELS
+        qualityModels: QUALITY_MODELS,
+        savesImages: SAVE_IMAGES
       });
+    }
+
+    // Fetching one saved image by its random id needs no password, because an
+    // <img src> cannot send a header. The id is the capability; the listing that
+    // hands out ids is behind the password, just below.
+    if (urlPath.startsWith('/api/image/')) {
+      if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/image/.');
+      if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+      return serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/image/'.length)));
     }
 
     if (urlPath.startsWith('/api/')) {
@@ -646,6 +856,19 @@ const server = http.createServer(async function (req, res) {
       if (urlPath === '/api/usage') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/usage.');
         return sendJson(res, 200, await readUsage());
+      }
+
+      // Recent runs with the ids of their saved images, newest first. This is
+      // what lets the results survive a refresh.
+      if (urlPath === '/api/runs') {
+        if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/runs.');
+        if (!SAVE_IMAGES) return sendJson(res, 200, { runs: [], saving: false });
+        let limit = 20;
+        try {
+          const q = new URL(req.url, 'http://localhost').searchParams.get('limit');
+          if (q) limit = Math.min(100, Math.max(1, parseInt(q, 10) || 20));
+        } catch { /* keep the default */ }
+        return sendJson(res, 200, { runs: await readRuns(limit), saving: true });
       }
 
       if (urlPath === '/api/images') {
@@ -719,4 +942,5 @@ server.listen(PORT, HOST, function () {
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Usage log         ' + USAGE_LOG);
+  console.log('  Saved images      ' + (SAVE_IMAGES ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')' : 'off'));
 });

@@ -5,6 +5,7 @@
 .env.*
 !.env.example
 usage.jsonl
+images/
 
 node_modules/
 npm-debug.log*

@@ -43,7 +43,8 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var gate = $('gate'), gateForm = $('gate-form'), gatePassword = $('gate-password'),
-      gateError = $('gate-error'), gateSubmit = $('gate-submit');
+      gateError = $('gate-error'), gateSubmit = $('gate-submit'),
+      gateToggle = $('gate-password-toggle');
   var app = $('app');
   var userName = $('user-name'), userNameMobile = $('user-name-mobile'), mobileWho = $('mobile-who');
   var spendAmount = $('spend-amount'), spendRuns = $('spend-runs');
@@ -818,11 +819,21 @@
       elapsed.dataset.elapsedFor = run.id;
       aside.appendChild(elapsed);
     } else {
-      var when = clockTime(new Date(run.finishedAt || run.startedAt));
+      var made = new Date(run.finishedAt || run.startedAt);
+      var when = clockTime(made);
       var took = duration((run.finishedAt || Date.now()) - run.startedAt);
-      var timeText = run.status === 'cancelled'
-        ? 'Cancelled · kept ' + got + ' of ' + run.frames.length
-        : when + ' · took ' + took;
+      var timeText;
+      if (run.status === 'cancelled') {
+        timeText = 'Cancelled · kept ' + got + ' of ' + run.frames.length;
+      } else if (run.restored) {
+        // Restored from the server: the duration was not recorded, and the run
+        // may not even be from today, so date it rather than invent a 0:00.
+        var today = new Date();
+        var sameDay = made.toDateString() === today.toDateString();
+        timeText = sameDay ? when : made.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' · ' + when;
+      } else {
+        timeText = when + ' · took ' + took;
+      }
       aside.appendChild(el('span', 'run__time num', timeText));
       if (got > 0) {
         var dlAll = el('button', 'btn-text btn-text--13', got > 1 ? 'Download all' : 'Download');
@@ -996,7 +1007,21 @@
   // -------------------------------------------------------------------------
   // Edit this / Again
   // -------------------------------------------------------------------------
-  function editThis(run, image) {
+  function toDataUri(src) {
+    if (!src || src.indexOf('/api/image/') !== 0) return Promise.resolve(src);
+    return fetch(src)
+      .then(function (r) { return r.blob(); })
+      .then(function (blob) {
+        return new Promise(function (resolve, reject) {
+          var fr = new FileReader();
+          fr.onload = function () { resolve(String(fr.result)); };
+          fr.onerror = reject;
+          fr.readAsDataURL(blob);
+        });
+      });
+  }
+
+  async function editThis(run, image) {
     if (!image) return;
     closeLightbox();
 
@@ -1007,8 +1032,18 @@
     if (state.mode !== 'edit') promptEl.value = '';
 
     // Chaining matters: the source may itself be the output of an edit.
+    var dataUri;
+    try {
+      dataUri = await toDataUri(image.src);
+    } catch (err) {
+      showError('That image could not be loaded for editing',
+        'It may have been cleared from the server. Generate it again, or pick another frame.',
+        'danger');
+      return;
+    }
+
     state.sources = [{
-      dataUri: image.src,
+      dataUri: dataUri,
       name: imageFileName(run, image),
       size: image.bytes || 0,
       width: image.width || 0,
@@ -1281,7 +1316,9 @@
 
     var kind = item.b64 ? sniffImage(item.b64) : { mime: null, ext: 'png' };
     frame.image = {
-      src: item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url,
+      id: item.id || null,
+      src: item.id ? '/api/image/' + item.id
+        : (item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url),
       ext: kind.ext,
       bytes: item.b64 ? Math.round(item.b64.length * 0.75) : 0,
       // Filled in from the image itself once it loads — the only truthful
@@ -1737,6 +1774,28 @@
     return res.ok;
   }
 
+  // Reveal control. Keeping focus in the field means the caret does not jump,
+  // so someone checking a typo can carry on typing straight away.
+  gateToggle.addEventListener('click', function () {
+    var showing = gatePassword.type === 'text';
+    var end = gatePassword.value.length;
+    gatePassword.type = showing ? 'password' : 'text';
+    gateToggle.setAttribute('aria-pressed', String(!showing));
+    gateToggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    gateToggle.title = showing ? 'Show password' : 'Hide password';
+    gatePassword.focus();
+    try { gatePassword.setSelectionRange(end, end); } catch (err) { /* not supported while type=password */ }
+  });
+
+  // Never leave a password on screen once the gate is done with.
+  function hidePassword() {
+    if (gatePassword.type !== 'text') return;
+    gatePassword.type = 'password';
+    gateToggle.setAttribute('aria-pressed', 'false');
+    gateToggle.setAttribute('aria-label', 'Show password');
+    gateToggle.title = 'Show password';
+  }
+
   // Enter submits the gate. Browsers do this implicitly for a single-field form,
   // but the gate is the only way into the app, so it is wired explicitly rather
   // than left to implicit submission.
@@ -1764,6 +1823,7 @@
       }
       password = candidate;
       writeStore(PASS_KEY, candidate);
+      hidePassword();
       gatePassword.classList.remove('is-error');
       gateError.hidden = true;
       enterStudio();
@@ -1782,6 +1842,63 @@
     placeNameField();
     renderRail();
     promptEl.focus();
+    loadSavedRuns();
+  }
+
+  // Runs saved by the server, rebuilt into the same shape a live run has so the
+  // rest of the app cannot tell the difference.
+  async function loadSavedRuns() {
+    if (!config || !config.savesImages) return;
+    try {
+      var headers = password ? { 'x-team-password': password } : {};
+      var res = await fetch('/api/runs?limit=20', { headers: headers });
+      if (!res.ok) return;
+      var payload = await res.json();
+      var restored = (payload.runs || []).map(function (r) {
+        var frames = r.images.map(function (img) {
+          return {
+            status: 'done',
+            error: null,
+            image: {
+              id: img.id,
+              src: '/api/image/' + img.id,
+              ext: (img.id.split('.').pop() || 'png'),
+              bytes: 0, width: 0, height: 0,
+              frame: img.frame,
+              revised_prompt: null
+            }
+          };
+        });
+        var at = Date.parse(r.timestamp) || Date.now();
+        return {
+          id: 'saved-' + r.id,
+          mode: r.mode === 'edit' ? 'edit' : 'generate',
+          model: r.model,
+          prompt: r.prompt || '',
+          quality: r.quality,
+          shape: r.aspect_ratio || 'auto',
+          resolution: r.resolution || '1k',
+          n: frames.length,
+          sources: [],
+          frames: frames,
+          controllers: [],
+          status: 'done',
+          startedAt: at,
+          finishedAt: at,
+          cost: r.cost,
+          counted: true,
+          cancelled: false,
+          degraded: false,
+          restored: true
+        };
+      });
+      if (!restored.length) return;
+      // Anything generated in this tab stays on top of what was restored.
+      runs = runs.concat(restored);
+      renderRuns();
+    } catch (err) {
+      // The sheet simply stays empty; nothing here is worth an error card.
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1824,6 +1941,7 @@
       showError('No API key on the server',
         'Generating is switched off until someone adds the team key to the server environment. Post in #design-ops — nothing you change here will fix it.',
         'danger');
+      loadSavedRuns();
       return;
     }
 

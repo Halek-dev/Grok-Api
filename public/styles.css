@@ -308,6 +308,39 @@ button, input, textarea, select { font-family: inherit; }
 .name-input::placeholder { color: var(--muted); }
 .name-input:focus-visible { background: var(--surface); border-color: var(--structure); }
 
+/* Password field with a reveal control. The eye sits inside the field, so the
+   field keeps its own focus ring and the button gets its own on top. */
+.password-field { position: relative; display: block; }
+.password-field .input { padding-right: 46px; }
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 0;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+/* Which icon shows follows aria-pressed. Note the hidden ATTRIBUTE, not the
+   .hidden property: SVG elements are not HTMLElements and have no such property,
+   so assigning it in JS silently does nothing. */
+.password-toggle .icon-eye-off { display: none; }
+.password-toggle[aria-pressed='true'] .icon-eye { display: none; }
+.password-toggle[aria-pressed='true'] .icon-eye-off { display: block; }
+
+.password-toggle:hover { color: var(--structure); }
+.password-toggle[aria-pressed='true'] { color: var(--structure); }
+
 .field-error {
   font-size: 12px;
   line-height: 1.5;

@@ -174,6 +174,33 @@ To change how many run at once, edit `FRAME_CONCURRENCY` near the run section in
 `public/app.js`. Three is tested and safe; higher is untested and may trip the
 shared key's rate limit.
 
+### Saved images
+
+Every generated image is written to `DATA_DIR/images` under a random name like
+`bdeda2c1ad4a2315d7e295be4a6786bb.png`. The spend log records which files belong
+to which run, so opening the app rebuilds the recent runs into the results column
+exactly as they looked.
+
+Two endpoints back this:
+
+- `GET /api/runs?limit=20` — recent runs and the ids of their images. **Requires
+  the team password.** Ids that have since been pruned are filtered out, so the
+  page is never handed a link that will 404.
+- `GET /api/image/<id>` — the bytes. **Does not require the password**, because a
+  browser cannot attach a header to an `<img src>`. The id is a 128-bit random
+  value and the listing above is the only way to learn one, so knowing an id is
+  what grants access. Treat an image URL as shareable with anyone.
+
+Storage is capped by `MAX_STORED_IMAGES` (default 400) and the oldest are deleted
+first. A 2k PNG is around 6 MB, so the default ceiling is roughly 2.5 GB.
+
+To turn the whole thing off, set `SAVE_IMAGES=false`; the app then behaves as it
+originally did, with results living in the browser tab only.
+
+> **On Railway, Fly, or any container host, the filesystem is wiped on every
+> redeploy.** Mount a volume and set `DATA_DIR` to it, or the images and the
+> spend log disappear each time you deploy.
+
 ### Editing several photos at once
 
 Drop up to ten photos into edit mode and the same instruction is applied to each,
@@ -252,9 +279,10 @@ tail -n 10 usage.jsonl
 
 ## Things that are deliberate
 
-- **A refresh clears the page.** Runs and their images live in memory for the
-  session only; nothing is stored server-side. Download anything you want to
-  keep. This is why the empty state offers starting prompts.
+- **Runs survive a refresh.** Every generated image is written to disk on the
+  server, and the twenty most recent runs are restored into the results column
+  when the page loads — the same cards, not a separate history screen. Older runs
+  fall off the list once `MAX_STORED_IMAGES` is reached.
 - **Images come back as base64, not links.** xAI's hosted URLs are temporary, so
   a page full of them would quietly rot into broken images. The server asks for
   bytes and hands those to the browser. It still understands a URL response if
@@ -280,6 +308,9 @@ tail -n 10 usage.jsonl
 | `PORT` | `8787` | |
 | `HOST` | `0.0.0.0` | All interfaces. Use `127.0.0.1` to restrict to this machine. |
 | `UPSTREAM_TIMEOUT_MS` | `180000` | How long to wait for xAI before giving up. |
+| `DATA_DIR` | project folder | Where saved images and `usage.jsonl` live. Point at a mounted volume on any host with an ephemeral disk. |
+| `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
+| `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Only for a gateway, or a stub while testing. |
 
 Real environment variables win over `.env`.
