@@ -668,6 +668,37 @@ const server = http.createServer(async function (req, res) {
   }
 });
 
+// Without this, a port clash or a blocked bind exits with a raw stack trace.
+// Say what happened and what to do about it, like every other error here.
+server.on('error', function (err) {
+  if (err.code === 'EADDRINUSE') {
+    console.error('');
+    console.error('Port ' + PORT + ' is already in use.');
+    console.error('');
+    console.error('Imagine studio is most likely already running — open');
+    console.error('  http://localhost:' + PORT);
+    console.error('and check before starting a second copy.');
+    console.error('');
+    console.error('If it is something else on that port, either stop it or pick a');
+    console.error('different port by setting PORT in .env, then start again.');
+    console.error('');
+    console.error('To find what is holding it:');
+    console.error(process.platform === 'win32'
+      ? '  netstat -ano | findstr :' + PORT
+      : '  lsof -i :' + PORT);
+  } else if (err.code === 'EACCES') {
+    console.error('');
+    console.error('Not allowed to listen on port ' + PORT + '.');
+    console.error('Ports below 1024 need administrator rights — set PORT in .env');
+    console.error('to something above 1024, such as 8787, and start again.');
+  } else {
+    console.error('');
+    console.error('The server could not start: ' + err.message);
+  }
+  console.error('');
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, function () {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
   console.log('Imagine studio on http://' + shown + ':' + PORT);

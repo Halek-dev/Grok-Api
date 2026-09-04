@@ -335,6 +335,13 @@ keeps happening on one model, that model probably does not accept that parameter
 Upstream trouble. Retry, then post the code in #design-ops. The message shown is
 xAI's own, not a substitute.
 
+**"Port 8787 is already in use"**
+Almost always because the studio is already running — open
+<http://localhost:8787> before starting a second copy. If something else has the
+port, either stop it or set a different `PORT` in `.env`. To see what is holding
+it, run `netstat -ano | findstr :8787` on Windows, or `lsof -i :8787` on
+macOS and Linux.
+
 **The page loads but nothing is styled, or the console 404s**
 `server.js` serves from `public/`. Run it from the project root — `node server.js`,
 not `node ../server.js`.
