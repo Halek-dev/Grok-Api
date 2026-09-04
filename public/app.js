@@ -80,7 +80,7 @@
     mode: 'generate',
     model: '',
     quality: 'auto',
-    shape: '16:9',
+    shape: '9:16',
     resolution: '1k',
     frames: 1,
     name: '',
@@ -1441,7 +1441,7 @@
 
     state.model = saved.model || '';
     state.quality = saved.quality || 'auto';
-    state.shape = saved.shape || '16:9';
+    state.shape = saved.shape || '9:16';
     state.resolution = saved.resolution || '1k';
     state.frames = Math.min(10, Math.max(1, Number(saved.frames) || 1));
     state.name = saved.name || '';
