@@ -145,10 +145,31 @@ const SAVE_IMAGES = String(env('SAVE_IMAGES', 'true')).toLowerCase() !== 'false'
 // A 2k PNG is around 6 MB, so 400 images is roughly 2.5 GB at worst.
 const MAX_STORED_IMAGES = Math.max(0, Number(env('MAX_STORED_IMAGES', 400)) || 0);
 
-try {
-  if (SAVE_IMAGES) fs.mkdirSync(IMAGE_DIR, { recursive: true });
-} catch (err) {
-  console.error('[images] could not create ' + IMAGE_DIR + ': ' + err.message);
+// Prove the data directory is usable at boot rather than discovering it on the
+// first generation. On a container host this is almost always a volume that was
+// not mounted, or was mounted somewhere other than DATA_DIR.
+let STORAGE_READY = false;
+let STORAGE_PROBLEM = '';
+if (SAVE_IMAGES) {
+  try {
+    fs.mkdirSync(IMAGE_DIR, { recursive: true });
+    const probe = path.join(IMAGE_DIR, '.write-probe');
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    STORAGE_READY = true;
+  } catch (err) {
+    STORAGE_PROBLEM = err.message;
+    console.error('');
+    console.error('Cannot write to ' + IMAGE_DIR);
+    console.error('  ' + err.message);
+    console.error('');
+    console.error('Generated images and the spend log cannot be saved. The app will');
+    console.error('still run, but results will not survive a refresh.');
+    console.error('');
+    console.error('On Railway, Fly or similar: mount a volume and set DATA_DIR to its');
+    console.error('mount path, or set SAVE_IMAGES=false to turn saving off deliberately.');
+    console.error('');
+  }
 }
 // Only override this to route through a gateway, or to point the proxy at a
 // stub while testing. It must speak the same API as api.x.ai.
@@ -895,7 +916,7 @@ const server = http.createServer(async function (req, res) {
         requiresPassword: Boolean(TEAM_PASSWORD),
         prices: PRICES,
         qualityModels: QUALITY_MODELS,
-        savesImages: SAVE_IMAGES
+        savesImages: SAVE_IMAGES && STORAGE_READY
       });
     }
 
@@ -907,7 +928,7 @@ const server = http.createServer(async function (req, res) {
     // through to the authenticated block below.
     if (urlPath.startsWith('/api/image/') && req.method === 'GET') {
       if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
-      return serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/image/'.length)));
+      return await serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/image/'.length)));
     }
 
     if (urlPath.startsWith('/api/')) {
@@ -988,7 +1009,7 @@ const server = http.createServer(async function (req, res) {
       // what lets the results survive a refresh.
       if (urlPath === '/api/runs') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/runs.');
-        if (!SAVE_IMAGES) return sendJson(res, 200, { runs: [], saving: false });
+        if (!SAVE_IMAGES || !STORAGE_READY) return sendJson(res, 200, { runs: [], saving: false });
         let limit = 20;
         try {
           const q = new URL(req.url, 'http://localhost').searchParams.get('limit');
@@ -1015,19 +1036,37 @@ const server = http.createServer(async function (req, res) {
           if (err && err.code === 'BODY_TOO_LARGE') return tooLarge(req, res);
           return fail(res, 400, 'The request body could not be read.');
         }
-        return handleImages(req, res, body);
+        return await handleImages(req, res, body);
       }
 
       return fail(res, 404, 'No such endpoint: ' + urlPath);
     }
 
     if (req.method !== 'GET') return fail(res, 405, 'Method not allowed.');
-    return serveStatic(req, res, urlPath);
+    return await serveStatic(req, res, urlPath);
   } catch (err) {
     console.error('[server] unhandled error on ' + urlPath + ':', err);
     if (!res.headersSent) fail(res, 500, 'The server hit an unexpected error: ' + err.message);
     else res.end();
   }
+});
+
+// A team tool that dies must say why. Node exits on an unhandled rejection, and
+// on a hosted platform that reads as "deployment crashed" with nothing to go on.
+// One bad request should not take the studio down for everyone, so log it loudly
+// and keep serving.
+process.on('unhandledRejection', function (reason) {
+  console.error('[server] unhandled promise rejection — the request that caused it failed,');
+  console.error('[server] but the server is still running:');
+  console.error(reason && reason.stack ? reason.stack : reason);
+});
+
+// An uncaught exception may have left state inconsistent, so exit and let the
+// host restart cleanly — but print what happened first.
+process.on('uncaughtException', function (err) {
+  console.error('[server] uncaught exception, shutting down:');
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
 });
 
 // Without this, a port clash or a blocked bind exits with a raw stack trace.
@@ -1068,5 +1107,7 @@ server.listen(PORT, HOST, function () {
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Usage log         ' + USAGE_LOG);
-  console.log('  Saved images      ' + (SAVE_IMAGES ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')' : 'off'));
+  console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'
+    : STORAGE_READY ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')'
+    : 'NOT WRITABLE — ' + IMAGE_DIR + '  (' + STORAGE_PROBLEM + ')'));
 });
