@@ -123,6 +123,23 @@
     return Math.max(1, Math.round(n / 1024)) + ' KB';
   }
 
+  // xAI does not return one format: 1k comes back as JPEG, 2k as PNG, and that
+  // is not something the request states. Read it off the bytes rather than
+  // assuming, or the data URI lies about its type and downloads get the wrong
+  // extension.
+  function sniffImage(b64) {
+    var head = '';
+    try {
+      head = atob(b64.slice(0, 16));
+    } catch (err) {
+      head = '';
+    }
+    if (head.charCodeAt(0) === 0x89 && head.slice(1, 4) === 'PNG') return { mime: 'image/png', ext: 'png' };
+    if (head.charCodeAt(0) === 0xFF && head.charCodeAt(1) === 0xD8) return { mime: 'image/jpeg', ext: 'jpg' };
+    if (head.slice(0, 4) === 'RIFF' && head.slice(8, 12) === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+    return { mime: 'image/png', ext: 'png' };
+  }
+
   function wordCount(text) {
     var t = String(text || '').trim();
     return t ? t.split(/\s+/).length : 0;
@@ -168,8 +185,10 @@
     return d ? d.w + '×' + d.h : base + ' px';
   }
 
+  // Null for "auto": the model chooses the frame, so guessing a ratio would only
+  // make the grid jump when the real image arrives.
   function aspectRatioCss(shape) {
-    if (shape === 'auto') return '1 / 1';
+    if (!shape || shape === 'auto') return null;
     var parts = String(shape).split(':');
     return (Number(parts[0]) || 1) + ' / ' + (Number(parts[1]) || 1);
   }
@@ -637,6 +656,14 @@
     });
   }
 
+  // Prefer the dimensions of the image that came back over the rail's estimate.
+  function sizeChipText(run) {
+    var shapeText = run.shape === 'auto' ? 'Auto' : run.shape;
+    var first = run.images && run.images[0];
+    if (first && first.width) return shapeText + ' · ' + first.width + '×' + first.height;
+    return shapeText + ' · ' + sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024);
+  }
+
   function chipsFor(run) {
     var p = priceEntry(run.model);
     var chips = [p ? p.label : run.model];
@@ -658,8 +685,7 @@
     if (run.mode === 'edit') {
       chips.push('Edit');
     } else {
-      var shapeText = run.shape === 'auto' ? 'Auto' : run.shape;
-      chips.push(shapeText + ' · ' + sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024));
+      chips.push(sizeChipText(run));
     }
     var count = run.mode === 'edit' ? 1 : run.n;
     var countText = count + (count === 1 ? ' frame' : ' frames');
@@ -681,8 +707,11 @@
     headline.appendChild(promptLine);
 
     var chipRow = el('div', 'run__chips');
+    var sizeText = run.mode === 'edit' ? null : sizeChipText(run);
     chipsFor(run).forEach(function (text, i) {
       var chip = el('span', 'chip' + (i >= 2 ? ' num' : ''), text);
+      // Tagged so the first image can correct it to real dimensions on load.
+      if (sizeText && text === sizeText) chip.dataset.sizeChip = '1';
       chipRow.appendChild(chip);
     });
     headline.appendChild(chipRow);
@@ -747,6 +776,17 @@
     img.alt = run.prompt;
     img.loading = 'lazy';
     if (ratio) img.style.aspectRatio = ratio;
+    // Record what xAI actually produced. The rail's size label is an estimate;
+    // this is the real thing, and it is what results and the lightbox report.
+    img.addEventListener('load', function () {
+      if (image.width) return;
+      image.width = img.naturalWidth;
+      image.height = img.naturalHeight;
+      if (index === 0) {
+        var chip = wrap.closest('.run') && wrap.closest('.run').querySelector('[data-size-chip]');
+        if (chip) chip.textContent = sizeChipText(run);
+      }
+    });
     btn.appendChild(img);
     btn.addEventListener('click', function () { openLightbox(run, index); });
     wrap.appendChild(btn);
@@ -871,7 +911,9 @@
     if (run.quality && acceptsQuality(run.model)) {
       meta.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     }
-    if (run.mode !== 'edit') meta.push(sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024));
+    // Real dimensions once the image has loaded; the rail estimate only until then.
+    if (image.width) meta.push(image.width + '×' + image.height);
+    else if (run.mode !== 'edit') meta.push(sizeLabel(run.shape, run.resolution === '2k' ? 2048 : 1024));
     lbMeta.textContent = meta.join(' · ');
 
     lbImage.src = image.src;
@@ -1058,11 +1100,15 @@
       }
 
       var images = (payload.images || []).map(function (item) {
-        var src = item.b64 ? 'data:image/png;base64,' + item.b64 : item.url;
+        var kind = item.b64 ? sniffImage(item.b64) : { mime: null, ext: 'png' };
         return {
-          src: src,
-          ext: 'png',
+          src: item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url,
+          ext: kind.ext,
           bytes: item.b64 ? Math.round(item.b64.length * 0.75) : 0,
+          // Filled in from the image itself once it loads — the only truthful
+          // source for the dimensions xAI actually produced.
+          width: 0,
+          height: 0,
           revised_prompt: item.revised_prompt || null
         };
       });
