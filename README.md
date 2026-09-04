@@ -240,11 +240,36 @@ cost line shows the total before you commit, and each photo carries its own inpu
 charge.
 
 **The endpoint takes one source image per request, and that is a real limit.**
-You cannot feed it two photos and ask it to combine them. It will accept an array
-without complaint, but testing showed only the first image is used: sending a
-green photo and a magenta one with the instruction "return the SECOND photo"
-returned the green one. So this feature edits photos *in a batch*; it does not
-merge them.
+It will accept an array without complaint, but testing showed only the first
+image is used: sending a green photo and a magenta one with the instruction
+"return the SECOND photo" returned the green one. So edit mode edits photos *in
+a batch*; it does not merge them. For that, use Combine.
+
+### Combine — one picture from several
+
+Combine mode works around the one-image limit rather than pretending it is not
+there. Drop two to four photos and the browser draws them into a **single
+picture** — side by side for two, a 2×2 grid for three or four — and sends that
+one composite. The model genuinely sees them all at once, so a prompt can say
+"put the person on the left into the room on the right".
+
+The rail shows the composite before you spend anything, so what the model will
+see is never a guess. Photos are scaled to fit their panel whole, on white,
+rather than cropped to fill — cropping could cut off the very thing being
+referred to.
+
+Because it is one edit of one source image, it costs the same as a single edit:
+output price plus one input charge. One request, one image back.
+
+Two things to expect:
+
+- **Refer to photos by position, not by file name.** The model never learns that
+  a panel was called `grk1.png`; it only sees a picture with a left half and a
+  right half.
+- **Results are mixed.** This is a general image model interpreting a composite,
+  not a purpose-built compositing or face-swap tool. It often works and sometimes
+  ignores the instruction. Judge it on a couple of cheap attempts before relying
+  on it.
 
 ### Imagine 1.5 Quality retires on 2 November 2026
 
@@ -274,6 +299,9 @@ everyone, one JSON object per line:
 ```json
 {"timestamp":"2026-09-04T16:55:26.213Z","runId":"run-3-mtniakty","user":"Nadia R.","mode":"generate","model":"grok-imagine-image","quality":null,"resolution":"1k","aspect_ratio":"4:3","images":1,"cost":0.02,"degraded":false,"prompt":"a ceramic vase on a plaster shelf"}
 ```
+
+The `mode` field is `generate`, `edit` or `combine`, so the log says what was
+actually done rather than lumping the two photo modes together.
 
 **One line per image, not per run.** Because each frame is its own request, a
 six-frame run writes six lines. They all carry the same `runId`, which is what

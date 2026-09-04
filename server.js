@@ -183,12 +183,14 @@ function tierFor(model, quality, mode) {
   if (!p) return null;
   if (p.tiers.default) return p.tiers.default;
   const q = !quality || quality === 'auto'
-    ? p.autoQuality[mode === 'edit' ? 'edit' : 'generate']
+    ? p.autoQuality[(mode === 'edit' || mode === 'combine') ? 'edit' : 'generate']
     : quality;
   return p.tiers[q] || null;
 }
 
 function costFor(opts) {
+  // A combine is one edit of one composited source, so it prices as an edit.
+  if (opts.mode === 'combine') opts = Object.assign({}, opts, { mode: 'edit' });
   const p = PRICES[opts.model];
   const tier = tierFor(opts.model, opts.quality, opts.mode);
   // Unknown model or tier: the caller must say the cost is unknown, not guess.
@@ -672,7 +674,12 @@ async function handleImages(req, res, body) {
     return fail(res, 400, 'The request body was not valid JSON.', { code: 'bad_request' });
   }
 
-  const mode = input.mode === 'edit' ? 'edit' : 'generate';
+  // 'combine' is several photos composited into one picture by the client and
+  // sent as a single source. It uses the edits endpoint and is priced like an
+  // edit, but is logged under its own name so usage.jsonl stays truthful.
+  const MODES = ['generate', 'edit', 'combine'];
+  const mode = MODES.indexOf(input.mode) === -1 ? 'generate' : input.mode;
+  const usesEditEndpoint = mode === 'edit' || mode === 'combine';
   const model = String(input.model || '');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
   const user = typeof input.user === 'string' ? input.user.trim().slice(0, 80) : '';
@@ -687,7 +694,7 @@ async function handleImages(req, res, body) {
       { code: 'bad_request' });
   }
   if (!prompt) {
-    return fail(res, 400, mode === 'edit'
+    return fail(res, 400, usesEditEndpoint
       ? 'Describe the change you want before applying an edit.'
       : 'Write a prompt before generating.', { code: 'bad_request' });
   }
@@ -695,11 +702,11 @@ async function handleImages(req, res, body) {
   const acceptsQuality = QUALITY_MODELS.indexOf(model) !== -1;
   const quality = QUALITIES.indexOf(input.quality) === -1 ? 'auto' : input.quality;
 
-  const endpoint = mode === 'edit' ? '/images/edits' : '/images/generations';
+  const endpoint = usesEditEndpoint ? '/images/edits' : '/images/generations';
   let payload;
   let minimalPayload;
 
-  if (mode === 'edit') {
+  if (usesEditEndpoint) {
     const image = input.image;
     if (!image || typeof image !== 'string' || !image.trim()) {
       return fail(res, 400, 'Add a photo to edit — the edit endpoint needs one source image.', { code: 'bad_request' });
@@ -829,8 +836,8 @@ async function handleImages(req, res, body) {
     mode: mode,
     model: model,
     quality: acceptsQuality ? effectiveQuality : null,
-    resolution: mode === 'edit' ? null : effectiveResolution,
-    aspect_ratio: mode === 'edit' ? null : effectiveAspect,
+    resolution: usesEditEndpoint ? null : effectiveResolution,
+    aspect_ratio: usesEditEndpoint ? null : effectiveAspect,
     images: images.length,
     cost: cost,
     degraded: degraded,

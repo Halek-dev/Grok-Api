@@ -442,7 +442,14 @@ button, input, textarea, select { font-family: inherit; }
 .modeswitch__btn:disabled { cursor: not-allowed; }
 
 @media (max-width: 560px) {
-  .modeswitch__btn { padding: 11px; font-size: 14px; }
+  /* Three tabs at 375px: trim the side padding so the longest label stays on one
+     line, and keep the 44px tap target from the height rather than the padding. */
+  .modeswitch__btn {
+    padding: 0 6px;
+    min-height: 44px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
 }
 
 /* Frames slider */
@@ -665,6 +672,30 @@ button, input, textarea, select { font-family: inherit; }
 }
 .dropzone.is-rejected .dropzone__title { color: var(--danger); }
 .dropzone.is-rejected .dropzone__body  { color: var(--text); }
+
+/* The composite is the single picture the model actually receives, shown so
+   "the person on the left" is unambiguous before any money is spent. */
+.composite {
+  margin: 12px 0 0;
+  background: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px;
+}
+.composite img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.composite figcaption {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 8px;
+}
 
 .source-list {
   display: flex;
