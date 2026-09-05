@@ -31,6 +31,18 @@
 
   var RESOLUTIONS = ['1k', '2k'];
 
+  // What a reference photo contributes. Sent per photo so the reading model is
+  // told what to take from each one instead of inferring it.
+  var PHOTO_ROLES = [
+    { value: '',         label: 'Any part of it' },
+    { value: 'subject',  label: 'Subject' },
+    { value: 'setting',  label: 'Setting' },
+    { value: 'style',    label: 'Style' },
+    { value: 'pose',     label: 'Pose' },
+    { value: 'clothing', label: 'Clothing' },
+    { value: 'lighting', label: 'Lighting' }
+  ];
+
   var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   var ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
   var STORE_KEY = 'imagine-studio/settings';
@@ -59,6 +71,8 @@
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
       sourceList = $('source-list'), sourceLabel = $('source-label');
+  var writtenField = $('written-field'), writtenEl = $('written'),
+      writtenReset = $('written-reset'), writtenNote = $('written-note');
 
   var actionBtn = $('action'), actionReason = $('action-reason'),
       costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
@@ -472,6 +486,8 @@
     shapeSize.hidden = editing;
 
     sourceLabel.textContent = combining ? 'Reference photos' : 'Photos to edit';
+    writtenField.hidden = !combining || !writtenEl.value.trim();
+    writtenReset.hidden = writtenField.hidden;
 
     promptLabel.textContent = editing ? 'What should change?' : 'What should it make?';
     promptEl.placeholder = combining
@@ -507,10 +523,44 @@
       row.appendChild(thumb);
 
       var meta = el('div', 'source__meta');
-      meta.appendChild(el('div', 'source__name', src.name));
+      // In combine mode the photo is numbered, because the instruction can
+      // refer to it by that number and the reading model is told the same one.
+      meta.appendChild(el('div', 'source__name',
+        (state.mode === 'combine' ? 'Photo ' + (i + 1) + ' · ' : '') + src.name));
       meta.appendChild(el('div', 'source__dims num', src.width
         ? src.width + '×' + src.height + ' · ' + bytes(src.size)
         : bytes(src.size)));
+
+      // Saying what a photo is for removes the guesswork that "swap A with B"
+      // otherwise leaves.
+      if (state.mode === 'combine') {
+        var shell = el('div', 'select-shell select-shell--tiny on-sunken');
+        var sel = document.createElement('select');
+        sel.setAttribute('aria-label', 'What to use photo ' + (i + 1) + ' for');
+        sel.disabled = busy;
+        PHOTO_ROLES.forEach(function (r) {
+          var opt = document.createElement('option');
+          opt.value = r.value;
+          opt.textContent = r.label;
+          sel.appendChild(opt);
+        });
+        sel.value = src.role || '';
+        sel.addEventListener('change', function () {
+          src.role = sel.value;
+        });
+        shell.appendChild(sel);
+        var chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        chev.setAttribute('class', 'select-chevron');
+        chev.setAttribute('width', '10');
+        chev.setAttribute('height', '6');
+        chev.setAttribute('viewBox', '0 0 10 6');
+        chev.setAttribute('fill', 'none');
+        chev.setAttribute('aria-hidden', 'true');
+        chev.innerHTML = '<path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>';
+        shell.appendChild(chev);
+        meta.appendChild(shell);
+      }
+
       row.appendChild(meta);
 
       var remove = el('button', 'btn-destructive on-sunken', 'Remove');
@@ -909,12 +959,32 @@
   // through the ordinary generation path — same shapes, sizes, quality and frame
   // counts as any other run.
   // -------------------------------------------------------------------------
+  // Puts the written prompt on screen and reveals the field. Kept in one place
+  // so every path that produces a prompt shows it the same way.
+  function setWrittenPrompt(text) {
+    writtenEl.value = text || '';
+    writtenField.hidden = state.mode !== 'combine' || !writtenEl.value.trim();
+    writtenReset.hidden = writtenField.hidden;
+    renderAction();
+  }
+
+  // Clearing it means the next run reads the photos afresh.
+  writtenReset.addEventListener('click', function () {
+    setWrittenPrompt('');
+    promptEl.focus();
+  });
+
+  writtenEl.addEventListener('input', function () {
+    writtenNote.textContent = 'Edit this to correct it. Running again uses your version.';
+  });
+
   async function describeReferences(sources, instruction) {
     var res = await fetch('/api/describe', {
       method: 'POST',
       headers: authHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         images: sources.map(function (s) { return s.dataUri; }),
+        roles: sources.map(function (s) { return s.role || ''; }),
         instruction: instruction
       })
     });
@@ -1954,6 +2024,8 @@
 
     if (rejected) rejectDrop(rejected[0], rejected[1]);
     else { resetDropzone(); clearError(); }
+    // A prompt written from the old set of photos no longer describes this one.
+    if (state.mode === 'combine' && writtenEl.value.trim()) setWrittenPrompt('');
     renderRail();
   }
 
@@ -2035,21 +2107,30 @@
     var settings = currentSettings();
 
     if (settings.mode === 'combine') {
-      // Stage one: have the references read into a prompt. Cheap, but it is a
-      // network call, so the button has to say what is happening.
-      clearError();
-      setBusy(true, 'Reading the photos');
-      var read;
-      try {
-        read = await describeReferences(state.sources, settings.prompt);
-      } finally {
-        setBusy(false);
-      }
-      if (!read) return;
-
       settings.instruction = settings.prompt;   // what the person typed
-      settings.prompt = read.prompt;            // what the model will be given
-      settings.readCost = read.cost || 0;
+      var edited = writtenEl.value.trim();
+
+      if (edited) {
+        // Already read once, and possibly corrected by hand. Use it as-is and
+        // charge nothing for reading — that step has been paid for already.
+        settings.prompt = edited;
+        settings.readCost = 0;
+      } else {
+        // Stage one: have the references read into a prompt. Cheap, but it is a
+        // network call, so the button has to say what is happening.
+        clearError();
+        setBusy(true, 'Reading the photos');
+        var read;
+        try {
+          read = await describeReferences(state.sources, settings.prompt);
+        } finally {
+          setBusy(false);
+        }
+        if (!read) return;
+        settings.prompt = read.prompt;
+        settings.readCost = read.cost || 0;
+        setWrittenPrompt(read.prompt);
+      }
     }
 
     submitRun(settings);

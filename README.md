@@ -259,6 +259,38 @@ single new image. It runs in two stages:
 The written prompt appears under your instruction on the run card, so a poor
 result can be traced to a poor prompt and reworded rather than guessed at.
 
+#### Telling it exactly what you want
+
+Three things make the reading step precise rather than a guess.
+
+**Photos are numbered, and the model is told the numbers.** Each one is
+announced — *"Photo 1 — use this for the subject."* — before it is shown. Without
+that, "photo 1" in your instruction is something the model has to infer from
+message order, and an instruction naming a photo can land on the wrong one.
+
+**Each photo has a role.** A dropdown on every reference says what to take from
+it: Subject, Setting, Style, Pose, Clothing, Lighting, or *Any part of it*. This
+is what removes the ambiguity in something like "swap A with B". Tested with two
+portraits — a dark-haired woman and a blonde one:
+
+| Roles | Result |
+|---|---|
+| photo 1 = Subject, photo 2 = Clothing | dark hair, white collared shirt |
+| photo 1 = Clothing, photo 2 = Subject | blonde curls, black long-sleeved top |
+
+Swapping the roles swapped the output, which is the point.
+
+**The written prompt is editable.** If the reading is nearly right, fix the
+wording in the rail and run again — it uses your version and does **not** pay to
+read the photos a second time. "Read the photos again" clears it and starts over.
+Changing the photos clears it automatically, since a prompt written from the old
+set no longer describes the new one.
+
+One thing the reading model is told explicitly: the image model cannot see the
+photos and cannot follow instructions, so the prompt must describe the finished
+picture rather than say "swap" or "replace". That alone fixes a lot of the
+confusing results.
+
 Reading costs about **$0.003** — a fraction of a cent beside an image — and
 happens once per run however many frames you ask for. "Again" re-uses the prompt
 already written rather than paying to read the photos twice.

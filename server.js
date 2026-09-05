@@ -187,15 +187,30 @@ const VISION_MODEL = String(env('VISION_MODEL', 'grok-4.20-non-reasoning'));
 // 340 tokens, so this is fractions of a cent next to an image.
 const USD_PER_TICK = Number(env('USD_PER_TICK', 1e-10));
 
+// What a photo is being used for. The client offers these as a dropdown on each
+// reference; the text is what the reading model is actually told.
+const ROLE_BRIEF = {
+  subject: 'subject — the person, animal or object the picture is about',
+  setting: 'setting — the place, background and surroundings',
+  style: 'style — the look, palette, grain and treatment, not the content',
+  pose: 'pose — the body position, gesture and camera angle',
+  clothing: 'clothing — the garments, fabric and styling',
+  lighting: 'lighting — the light direction, quality and mood'
+};
+
 // How the reference photos get turned into a prompt. Kept here rather than in
 // the client so it can be tuned without a redeploy of anything else.
 const COMBINE_SYSTEM = [
   'You write prompts for a text-to-image model.',
-  'You will be shown reference photographs and told what the user wants made from them.',
+  'You are shown numbered reference photographs, told what each one is for, and told what the user wants made from them.',
+  'Take from each photo only what its stated role calls for, and ignore the rest of that photo.',
+  'If a photo has no stated role, use your judgement about what it contributes.',
   'Reply with ONE prompt for a single image, between 40 and 120 words.',
   'Describe the subject, clothing, setting, lighting, camera angle, composition and mood concretely and visually.',
-  'Write it as a direct description of the finished picture.',
-  'Never mention that references exist. Never write "first image", "second photo", "reference" or file names.',
+  'Write it as a direct description of the finished picture, in the present tense.',
+  'The image model cannot see the photographs and cannot follow instructions — it only renders what you describe,',
+  'so never write an instruction like "swap", "replace", "combine" or "keep": describe the finished result instead.',
+  'Never mention that references exist. Never write "photo 1", "second image", "reference" or file names.',
   'No preamble, no commentary, no quotation marks, no lists. Output the prompt text and nothing else.'
 ].join(' ');
 
@@ -706,13 +721,35 @@ async function handleDescribe(req, res, body) {
   const images = Array.isArray(input.images)
     ? input.images.filter((s) => typeof s === 'string' && s.trim()).slice(0, 6)
     : [];
+  // What each photo is for. Same order as images; anything unrecognised is
+  // treated as an unlabelled reference.
+  const roles = Array.isArray(input.roles) ? input.roles : [];
   const instruction = typeof input.instruction === 'string' ? input.instruction.trim() : '';
 
   if (!images.length) return fail(res, 400, 'Add at least one reference photo.', { code: 'bad_request' });
   if (!instruction) return fail(res, 400, 'Say what you want made from these photos.', { code: 'bad_request' });
 
-  const content = [{ type: 'text', text: instruction }];
-  for (const url of images) content.push({ type: 'image_url', image_url: { url: url } });
+  // Each photo is announced before it is shown, so "photo 1" in the instruction
+  // refers to something the model was actually told the number of. Without this
+  // the numbering is left to inference from message order, and an instruction
+  // naming a photo can be applied to the wrong one.
+  const content = [];
+  images.forEach((url, i) => {
+    const role = ROLE_BRIEF[roles[i]] || null;
+    content.push({
+      type: 'text',
+      text: 'Photo ' + (i + 1) + (role ? ' — use this for the ' + role + '.' : ':')
+    });
+    content.push({ type: 'image_url', image_url: { url: url } });
+  });
+
+  // The instruction comes last so it reads as the request about the photos just
+  // shown, rather than as a caption for the first one.
+  const named = images.map((_, i) => 'photo ' + (i + 1)).join(', ');
+  content.push({
+    type: 'text',
+    text: 'The photos above are ' + named + '. What is wanted: ' + instruction
+  });
 
   let response;
   try {

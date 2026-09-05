@@ -105,6 +105,19 @@
           </div>
         </div>
 
+        <!-- Combine mode only. What the photos were read into, and the only text
+             the image model receives. Editable, so a near-miss can be corrected
+             and re-run without paying to read the photos again. -->
+        <div class="field" id="written-field" hidden>
+          <label class="label" for="written">Prompt from the photos</label>
+          <textarea class="textarea textarea--edit" id="written" maxlength="1200"
+                    aria-describedby="written-hint"></textarea>
+          <div class="hint-row" id="written-hint">
+            <span id="written-note">Edit this to correct it. Running again uses your version.</span>
+            <button class="btn-text" type="button" id="written-reset" hidden>Read the photos again</button>
+          </div>
+        </div>
+
         <!-- Model -->
         <div class="field">
           <label class="label" for="model">Model</label>
