@@ -71,6 +71,8 @@
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
       sourceList = $('source-list'), sourceLabel = $('source-label');
+  var wordingField = $('wording-field'), wordingKeep = $('wording-keep'),
+      wordingRewrite = $('wording-rewrite'), wordingHint = $('wording-hint');
   var writtenField = $('written-field'), writtenEl = $('written'),
       writtenReset = $('written-reset'), writtenNote = $('written-note');
 
@@ -96,6 +98,7 @@
     shape: '9:16',
     resolution: '1k',
     frames: 1,
+    wording: 'keep',
     name: '',
     sources: [] // [{ dataUri, name, size, width, height }] — one edit per photo
   };
@@ -486,6 +489,14 @@
     shapeSize.hidden = editing;
 
     sourceLabel.textContent = combining ? 'Reference photos' : 'Photos to edit';
+    wordingField.hidden = !combining;
+    wordingKeep.setAttribute('aria-checked', String(state.wording === 'keep'));
+    wordingRewrite.setAttribute('aria-checked', String(state.wording === 'rewrite'));
+    wordingKeep.tabIndex = state.wording === 'keep' ? 0 : -1;
+    wordingRewrite.tabIndex = state.wording === 'rewrite' ? 0 : -1;
+    wordingHint.textContent = state.wording === 'keep'
+      ? 'Your words are used exactly as typed. The photos only add detail after them.'
+      : 'The model writes the whole prompt from your photos. Reads better, but your wording is replaced.';
     writtenField.hidden = !combining || !writtenEl.value.trim();
     writtenReset.hidden = writtenField.hidden;
 
@@ -711,6 +722,7 @@
       shape: state.shape,
       resolution: state.resolution,
       frames: state.frames,
+      wording: state.wording,
       name: state.name
     });
   }
@@ -969,6 +981,29 @@
   }
 
   // Clearing it means the next run reads the photos afresh.
+  [wordingKeep, wordingRewrite].forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (busy) return;
+      var next = btn.dataset.style;
+      if (state.wording === next) return;
+      state.wording = next;
+      // A prompt built the other way no longer matches the setting.
+      setWrittenPrompt('');
+      renderRail();
+      btn.focus();
+    });
+  });
+
+  $('wording').addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    var next = state.wording === 'keep' ? 'rewrite' : 'keep';
+    state.wording = next;
+    setWrittenPrompt('');
+    renderRail();
+    (next === 'keep' ? wordingKeep : wordingRewrite).focus();
+  });
+
   writtenReset.addEventListener('click', function () {
     setWrittenPrompt('');
     promptEl.focus();
@@ -985,6 +1020,7 @@
       body: JSON.stringify({
         images: sources.map(function (s) { return s.dataUri; }),
         roles: sources.map(function (s) { return s.role || ''; }),
+        style: state.wording,
         instruction: instruction
       })
     });
@@ -2332,6 +2368,7 @@
     state.shape = saved.shape || '9:16';
     state.resolution = saved.resolution || '1k';
     state.frames = Math.min(10, Math.max(1, Number(saved.frames) || 1));
+    state.wording = saved.wording === 'rewrite' ? 'rewrite' : 'keep';
     state.name = saved.name || '';
 
     buildModelOptions();

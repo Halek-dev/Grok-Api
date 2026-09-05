@@ -423,6 +423,9 @@ button, input, textarea, select { font-family: inherit; }
 }
 .modeswitch.is-disabled { opacity: 0.6; }
 
+/* A second, quieter switch inside the rail. Same component, smaller. */
+.modeswitch--sub .modeswitch__btn { padding: 6px 8px; font-size: 12px; }
+
 .modeswitch__btn {
   flex: 1;
   text-align: center;

@@ -118,6 +118,19 @@
           </div>
         </div>
 
+        <!-- Combine mode only. Whether the prompt stays in the user's own words
+             with reference detail appended, or is authored by the model. -->
+        <div class="field" id="wording-field" hidden>
+          <span class="label" id="wording-label">Prompt wording</span>
+          <div class="modeswitch modeswitch--sub" id="wording" role="radiogroup" aria-labelledby="wording-label">
+            <button class="modeswitch__btn" type="button" role="radio" id="wording-keep"
+                    data-style="keep" aria-checked="true">Keep mine</button>
+            <button class="modeswitch__btn" type="button" role="radio" id="wording-rewrite"
+                    data-style="rewrite" aria-checked="false" tabindex="-1">Let it rewrite</button>
+          </div>
+          <div class="hint" id="wording-hint">Your words are used exactly as typed. The photos only add detail after them.</div>
+        </div>
+
         <!-- Model -->
         <div class="field">
           <label class="label" for="model">Model</label>

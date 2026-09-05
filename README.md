@@ -280,11 +280,32 @@ portraits — a dark-haired woman and a blonde one:
 
 Swapping the roles swapped the output, which is the point.
 
-**The written prompt is editable.** If the reading is nearly right, fix the
-wording in the rail and run again — it uses your version and does **not** pay to
-read the photos a second time. "Read the photos again" clears it and starts over.
-Changing the photos clears it automatically, since a prompt written from the old
-set no longer describes the new one.
+**Your wording is kept.** This is the default and it matters: what you type is
+used *exactly as typed*, and the photos only add detail after it.
+
+```
+A moody low-key portrait, hard rim light from behind, deep shadows,
+shot on 85mm, film grain.                          ← your words, verbatim
+Woman with long straight dark brown hair, fair
+skin, dark eyes, wearing black top.                ← from photo 1 (Subject)
+White collared button-up shirt, crisp cotton
+fabric, structured collar.                         ← from photo 2 (Clothing)
+```
+
+The reading model is told your prompt already exists and that anything it
+describes outside a photo's stated role will fight your wording — so with a
+Subject role it describes the person and *not* the lighting, framing or
+background, which are yours to set. Without that rule it kept appending "soft
+even studio lighting" to prompts that asked for hard rim light.
+
+**Let it rewrite** is the other option, one tap away. The model authors the whole
+prompt from your photos. It reads better and is more evocative, but your wording
+is replaced — which is why it is not the default.
+
+**The prompt is editable either way.** If it is nearly right, fix it in the rail
+and run again — it uses your version and does **not** pay to read the photos a
+second time. "Read the photos again" clears it. Changing the photos, or switching
+between Keep and Rewrite, clears it too, since the old text no longer matches.
 
 One thing the reading model is told explicitly: the image model cannot see the
 photos and cannot follow instructions, so the prompt must describe the finished

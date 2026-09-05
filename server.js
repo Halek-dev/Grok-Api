@@ -200,6 +200,26 @@ const ROLE_BRIEF = {
 
 // How the reference photos get turned into a prompt. Kept here rather than in
 // the client so it can be tuned without a redeploy of anything else.
+// Default. The person's own wording is the prompt; the photos only supply the
+// visual detail their words cannot carry. Nothing they typed is rephrased.
+const COMBINE_DETAIL_SYSTEM = [
+  'You describe reference photographs for someone who is writing a text-to-image prompt.',
+  'You are shown numbered photographs and told what each one is being used for.',
+  'For each photo, describe ONLY what its stated role calls for, and ignore everything else in that photo.',
+  'This matters: the person has already written their own prompt, and your description is appended to it.',
+  'Anything you describe outside the stated role will fight their wording.',
+  'So unless it IS the stated role, never describe lighting, mood, camera, lens, framing, composition or background.',
+  'A subject role means the person or object only. A clothing role means the garments only.',
+  'If a photo has no stated role, describe its most visually distinctive content.',
+  'Be concrete and visual: colour, material, shape, hair, features, garment, texture.',
+  'Each description is one comma-separated phrase of at most 25 words. Not a sentence. No verbs of instruction.',
+  'Never restate, rephrase, interpret or answer the request. You are only describing what is in the photographs.',
+  'Output one line per photo, in order, formatted exactly as: N| description',
+  'No preamble, no commentary, no quotation marks, nothing else.'
+].join(' ');
+
+// Opt-in. The model writes the whole prompt itself, which reads better but
+// replaces the person's wording — the reason it is not the default.
 const COMBINE_SYSTEM = [
   'You write prompts for a text-to-image model.',
   'You are shown numbered reference photographs, told what each one is for, and told what the user wants made from them.',
@@ -213,6 +233,34 @@ const COMBINE_SYSTEM = [
   'Never mention that references exist. Never write "photo 1", "second image", "reference" or file names.',
   'No preamble, no commentary, no quotation marks, no lists. Output the prompt text and nothing else.'
 ].join(' ');
+
+// Joins the person's own prompt to the details read off the photos. Their text
+// is never altered — it stays exactly as typed, at the front, and the reference
+// detail follows it.
+function composePrompt(instruction, details) {
+  let head = instruction.trim();
+  const tail = details
+    .map((d) => d.trim().replace(/[.\s]+$/, ''))
+    .filter(Boolean)
+    .map((d) => d.charAt(0).toUpperCase() + d.slice(1));
+  if (!tail.length) return head;
+  if (!/[.!?,;:]$/.test(head)) head += '.';
+  return head + ' ' + tail.join('. ') + '.';
+}
+
+// Parses "N| description" lines back into an ordered list, tolerating a model
+// that drops the numbering.
+function parseDetailLines(text, count) {
+  const out = [];
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^(\d+)\s*[|.:)-]\s*(.+)$/);
+    if (m) out[Math.max(0, Math.min(count - 1, parseInt(m[1], 10) - 1))] = m[2].trim();
+    else out.push(line);
+  }
+  return out.filter(Boolean).slice(0, count);
+}
 
 // ---------------------------------------------------------------------------
 // Cost
@@ -725,6 +773,9 @@ async function handleDescribe(req, res, body) {
   // treated as an unlabelled reference.
   const roles = Array.isArray(input.roles) ? input.roles : [];
   const instruction = typeof input.instruction === 'string' ? input.instruction.trim() : '';
+  // 'keep' leaves the person's wording untouched and only appends what the photos
+  // show. 'rewrite' lets the model author the whole prompt instead.
+  const style = input.style === 'rewrite' ? 'rewrite' : 'keep';
 
   if (!images.length) return fail(res, 400, 'Add at least one reference photo.', { code: 'bad_request' });
   if (!instruction) return fail(res, 400, 'Say what you want made from these photos.', { code: 'bad_request' });
@@ -759,7 +810,7 @@ async function handleDescribe(req, res, body) {
       body: JSON.stringify({
         model: VISION_MODEL,
         messages: [
-          { role: 'system', content: COMBINE_SYSTEM },
+          { role: 'system', content: style === 'rewrite' ? COMBINE_SYSTEM : COMBINE_DETAIL_SYSTEM },
           { role: 'user', content: content }
         ],
         max_tokens: 400,
@@ -793,15 +844,20 @@ async function handleDescribe(req, res, body) {
   }
 
   const choice = json.choices && json.choices[0];
-  const prompt = choice && choice.message && typeof choice.message.content === 'string'
+  const raw = choice && choice.message && typeof choice.message.content === 'string'
     ? choice.message.content.trim().replace(/^["'\s]+|["'\s]+$/g, '')
     : '';
 
-  if (!prompt) {
+  if (!raw) {
     return fail(res, 422,
-      'The model read the photos but returned no prompt. Try describing what you want more plainly.',
+      'The model read the photos but returned nothing. Try describing what you want more plainly.',
       { code: 'moderation' });
   }
+
+  // In 'keep' the reply is per-photo detail and the prompt is the person's own
+  // wording with that detail appended. In 'rewrite' the reply is the prompt.
+  const details = style === 'keep' ? parseDetailLines(raw, images.length) : [];
+  const prompt = style === 'keep' ? composePrompt(instruction, details) : raw;
 
   const ticks = json.usage && typeof json.usage.cost_in_usd_ticks === 'number'
     ? json.usage.cost_in_usd_ticks : 0;
@@ -809,6 +865,8 @@ async function handleDescribe(req, res, body) {
 
   sendJson(res, 200, {
     prompt: prompt,
+    details: details,
+    style: style,
     cost: cost,
     tokens: (json.usage && json.usage.total_tokens) || 0,
     model: VISION_MODEL
