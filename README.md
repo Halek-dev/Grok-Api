@@ -245,31 +245,52 @@ image is used: sending a green photo and a magenta one with the instruction
 "return the SECOND photo" returned the green one. So edit mode edits photos *in
 a batch*; it does not merge them. For that, use Combine.
 
-### Combine — one picture from several
+### Combine — one image from several references
 
-Combine mode works around the one-image limit rather than pretending it is not
-there. Drop two to four photos and the browser draws them into a **single
-picture** — side by side for two, a 2×2 grid for three or four — and sends that
-one composite. The model genuinely sees them all at once, so a prompt can say
-"put the person on the left into the room on the right".
+Drop reference photos, say what you want made from them, and Combine produces a
+single new image. It runs in two stages:
 
-The rail shows the composite before you spend anything, so what the model will
-see is never a guess. Photos are scaled to fit their panel whole, on white,
-rather than cropped to fill — cropping could cut off the very thing being
-referred to.
+1. **The photos are read.** They go to a chat model that accepts image input
+   (`VISION_MODEL`, default `grok-4.20-non-reasoning`), which sees all of them at
+   once and writes one detailed generation prompt.
+2. **That prompt is generated normally.** Same models, shapes, sizes, quality and
+   frame counts as any other run — Combine is a generation, not an edit.
 
-Because it is one edit of one source image, it costs the same as a single edit:
-output price plus one input charge. One request, one image back.
+The written prompt appears under your instruction on the run card, so a poor
+result can be traced to a poor prompt and reworded rather than guessed at.
 
-Two things to expect:
+Reading costs about **$0.003** — a fraction of a cent beside an image — and
+happens once per run however many frames you ask for. "Again" re-uses the prompt
+already written rather than paying to read the photos twice.
 
-- **Refer to photos by position, not by file name.** The model never learns that
-  a panel was called `grk1.png`; it only sees a picture with a left half and a
-  right half.
-- **Results are mixed.** This is a general image model interpreting a composite,
-  not a purpose-built compositing or face-swap tool. It often works and sometimes
-  ignores the instruction. Judge it on a couple of cheap attempts before relying
-  on it.
+#### Why it works this way
+
+The image endpoints cannot take more than one reference. This was measured, not
+assumed:
+
+- **`/images/edits` takes exactly one source image.** Passing an array does not
+  give it several: `image` deserialises as a single two-field struct, so
+  `[a, b]` means `{url: a, type: b}`. The error for a one-element array says it
+  outright — *"invalid length 1, expected struct ImageUrl with 2 elements"*.
+- **`/images/generations` ignores an `image` field entirely.** It accepts one
+  without complaint and generates from the prompt alone.
+
+An earlier version composited the photos into one picture and sent that through
+the edits endpoint. It produced poor results for a reason obvious in hindsight:
+an edit endpoint edits the picture it is given, so a side-by-side went in and an
+edited side-by-side came out. Reading the references and generating fresh is what
+actually works.
+
+#### What it will not do
+
+**It does not copy likeness.** There is no reference-image input on the
+generation endpoint, so the output is a new image *described from* your
+references, not a composite of them. A specific person's face will not survive
+the round trip. For identity-preserving face swaps you need a tool built for
+that — this API cannot do it, and no wording of the prompt changes that.
+
+What it is good at is compositional: a subject in a different setting, an object
+in a new scene, one photo's styling applied to another's content.
 
 ### Imagine 1.5 Quality retires on 2 November 2026
 
@@ -370,6 +391,8 @@ tail -n 10 usage.jsonl
 | `DATA_DIR` | project folder | Where saved images and `usage.jsonl` live. Point at a mounted volume on any host with an ephemeral disk. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
+| `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model that reads reference photos in Combine mode. Must accept image input. |
+| `USD_PER_TICK` | `1e-10` | Converts xAI chat usage ticks to dollars for the running total. Verify against the pricing page. |
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Only for a gateway, or a stub while testing. |
 
 Real environment variables win over `.env`.

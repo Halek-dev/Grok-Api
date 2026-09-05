@@ -175,6 +175,30 @@ if (SAVE_IMAGES) {
 // stub while testing. It must speak the same API as api.x.ai.
 const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+$/, '');
 
+// Combine mode reads the reference photos with a chat model that accepts image
+// input, and has it write the generation prompt. The image endpoints take one
+// source image and no reference input at all, so this is the only way to put
+// several references in front of the model at once.
+const VISION_MODEL = String(env('VISION_MODEL', 'grok-4.20-non-reasoning'));
+
+// xAI reports chat usage as cost_in_usd_ticks. VERIFY the tick value against
+// https://docs.x.ai/developers/pricing — like the image prices it is used only
+// for the local running total, never sent anywhere. A reading step is roughly
+// 340 tokens, so this is fractions of a cent next to an image.
+const USD_PER_TICK = Number(env('USD_PER_TICK', 1e-10));
+
+// How the reference photos get turned into a prompt. Kept here rather than in
+// the client so it can be tuned without a redeploy of anything else.
+const COMBINE_SYSTEM = [
+  'You write prompts for a text-to-image model.',
+  'You will be shown reference photographs and told what the user wants made from them.',
+  'Reply with ONE prompt for a single image, between 40 and 120 words.',
+  'Describe the subject, clothing, setting, lighting, camera angle, composition and mood concretely and visually.',
+  'Write it as a direct description of the finished picture.',
+  'Never mention that references exist. Never write "first image", "second photo", "reference" or file names.',
+  'No preamble, no commentary, no quotation marks, no lists. Output the prompt text and nothing else.'
+].join(' ');
+
 // ---------------------------------------------------------------------------
 // Cost
 // ---------------------------------------------------------------------------
@@ -183,14 +207,12 @@ function tierFor(model, quality, mode) {
   if (!p) return null;
   if (p.tiers.default) return p.tiers.default;
   const q = !quality || quality === 'auto'
-    ? p.autoQuality[(mode === 'edit' || mode === 'combine') ? 'edit' : 'generate']
+    ? p.autoQuality[mode === 'edit' ? 'edit' : 'generate']
     : quality;
   return p.tiers[q] || null;
 }
 
 function costFor(opts) {
-  // A combine is one edit of one composited source, so it prices as an edit.
-  if (opts.mode === 'combine') opts = Object.assign({}, opts, { mode: 'edit' });
   const p = PRICES[opts.model];
   const tier = tierFor(opts.model, opts.quality, opts.mode);
   // Unknown model or tier: the caller must say the cost is unknown, not guess.
@@ -660,6 +682,103 @@ async function callXai(endpoint, payload) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/describe
+//
+// Reads the reference photos and returns a generation prompt. This exists
+// because the image endpoints cannot take more than one source image: `image`
+// deserialises as a single two-field struct, so an array is not a list of
+// pictures, and /images/generations ignores the field entirely. A chat model
+// that accepts image input is the only place several references can be seen at
+// once, so it looks at them and writes the prompt instead.
+// ---------------------------------------------------------------------------
+async function handleDescribe(req, res, body) {
+  if (!XAI_API_KEY) {
+    return fail(res, 503, 'No API key on the server. Add XAI_API_KEY to .env and restart.', { code: 'no_key' });
+  }
+
+  let input;
+  try {
+    input = JSON.parse(body || '{}');
+  } catch {
+    return fail(res, 400, 'The request body was not valid JSON.', { code: 'bad_request' });
+  }
+
+  const images = Array.isArray(input.images)
+    ? input.images.filter((s) => typeof s === 'string' && s.trim()).slice(0, 6)
+    : [];
+  const instruction = typeof input.instruction === 'string' ? input.instruction.trim() : '';
+
+  if (!images.length) return fail(res, 400, 'Add at least one reference photo.', { code: 'bad_request' });
+  if (!instruction) return fail(res, 400, 'Say what you want made from these photos.', { code: 'bad_request' });
+
+  const content = [{ type: 'text', text: instruction }];
+  for (const url of images) content.push({ type: 'image_url', image_url: { url: url } });
+
+  let response;
+  try {
+    response = await fetch(XAI_BASE + '/chat/completions', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + XAI_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [
+          { role: 'system', content: COMBINE_SYSTEM },
+          { role: 'user', content: content }
+        ],
+        max_tokens: 400,
+        temperature: 0.7
+      }),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    });
+  } catch (err) {
+    const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    return fail(res, 504, timedOut
+      ? 'Reading the photos took too long and was given up on.'
+      : 'Could not reach api.x.ai to read the photos (' + (err && err.message ? err.message : 'network error') + ').',
+      { code: timedOut ? 'timeout' : 'network' });
+  }
+
+  const text = await response.text();
+  if (!response.ok) {
+    const message = extractError(text, response.status);
+    return fail(res, response.status >= 500 ? 502 : response.status, message, {
+      code: classify(response.status, message),
+      upstreamStatus: response.status,
+      retryAfter: retryAfterSeconds(response.headers)
+    });
+  }
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return fail(res, 502, 'xAI answered the reading step with a body that is not JSON.', { code: 'upstream' });
+  }
+
+  const choice = json.choices && json.choices[0];
+  const prompt = choice && choice.message && typeof choice.message.content === 'string'
+    ? choice.message.content.trim().replace(/^["'\s]+|["'\s]+$/g, '')
+    : '';
+
+  if (!prompt) {
+    return fail(res, 422,
+      'The model read the photos but returned no prompt. Try describing what you want more plainly.',
+      { code: 'moderation' });
+  }
+
+  const ticks = json.usage && typeof json.usage.cost_in_usd_ticks === 'number'
+    ? json.usage.cost_in_usd_ticks : 0;
+  const cost = Math.round(ticks * USD_PER_TICK * 1e6) / 1e6;
+
+  sendJson(res, 200, {
+    prompt: prompt,
+    cost: cost,
+    tokens: (json.usage && json.usage.total_tokens) || 0,
+    model: VISION_MODEL
+  });
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/images
 // ---------------------------------------------------------------------------
 async function handleImages(req, res, body) {
@@ -679,7 +798,10 @@ async function handleImages(req, res, body) {
   // edit, but is logged under its own name so usage.jsonl stays truthful.
   const MODES = ['generate', 'edit', 'combine'];
   const mode = MODES.indexOf(input.mode) === -1 ? 'generate' : input.mode;
-  const usesEditEndpoint = mode === 'edit' || mode === 'combine';
+  // Combine used to composite photos into one source image and go through the
+  // edits endpoint. It no longer does: the references are read by a vision model
+  // which writes the prompt, and this is a plain generation from that prompt.
+  const usesEditEndpoint = mode === 'edit';
   const model = String(input.model || '');
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
   const user = typeof input.user === 'string' ? input.user.trim().slice(0, 80) : '';
@@ -1023,6 +1145,18 @@ const server = http.createServer(async function (req, res) {
           if (q) limit = Math.min(100, Math.max(1, parseInt(q, 10) || 20));
         } catch { /* keep the default */ }
         return sendJson(res, 200, { runs: await readRuns(limit), saving: true });
+      }
+
+      if (urlPath === '/api/describe') {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for /api/describe.');
+        let dbody;
+        try {
+          dbody = await readBody(req, MAX_BODY_BYTES);
+        } catch (err) {
+          if (err && err.code === 'BODY_TOO_LARGE') return tooLarge(req, res);
+          return fail(res, 400, 'The request body could not be read.');
+        }
+        return await handleDescribe(req, res, dbody);
       }
 
       if (urlPath === '/api/images') {

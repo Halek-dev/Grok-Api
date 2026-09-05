@@ -59,9 +59,7 @@
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
       sourceList = $('source-list'), sourceLabel = $('source-label');
-  var compositeEl = $('composite'), compositePreview = $('composite-preview'),
-      compositeCaption = $('composite-caption');
-  var compositeCache = null;
+
   var actionBtn = $('action'), actionReason = $('action-reason'),
       costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
   var runError = $('run-error');
@@ -224,7 +222,7 @@
     if (p.tiers['default']) return p.tiers['default'];
     if (!p.autoQuality) return null;
     var q = (!quality || quality === 'auto')
-      ? p.autoQuality[(mode === 'edit' || mode === 'combine') ? 'edit' : 'generate']
+      ? p.autoQuality[mode === 'edit' ? 'edit' : 'generate']
       : quality;
     return p.tiers[q] || null;
   }
@@ -233,7 +231,7 @@
   function perImage(model, quality, resolution, mode) {
     var tier = tierFor(model, quality, mode);
     if (!tier) return null;
-    var res = (mode === 'edit' || mode === 'combine') ? '1k' : resolution;
+    var res = mode === 'edit' ? '1k' : resolution;
     var v = tier[res];
     return typeof v === 'number' ? v : null;
   }
@@ -243,12 +241,9 @@
     var per = perImage(state.model, state.quality, state.resolution, mode);
     if (per == null) return null;
     var p = priceEntry(state.model);
-    var count = mode === 'combine' ? 1
-      : mode === 'edit' ? Math.max(1, state.sources.length)
-      : state.frames;
+    var count = mode === 'edit' ? Math.max(1, state.sources.length) : state.frames;
     // input is charged once per source image, so an edit of N photos pays it N times.
-    var isEditish = mode === 'edit' || mode === 'combine';
-    var input = isEditish && p && typeof p.input === 'number' ? p.input : 0;
+    var input = mode === 'edit' && p && typeof p.input === 'number' ? p.input : 0;
     return { total: (per + input) * count, per: per, count: count, input: input };
   }
 
@@ -471,16 +466,16 @@
     });
 
     sourceField.hidden = !needsPhotos;
-    // The frames slider is removed, not disabled: both photo modes return one
-    // image per request, so a frame count would mean nothing.
-    framesField.hidden = needsPhotos;
-    shapeSize.hidden = needsPhotos;
+    // Only editing loses these. A combine reads the references and then runs an
+    // ordinary generation, so shape, size and frame count all still apply.
+    framesField.hidden = editing;
+    shapeSize.hidden = editing;
 
-    sourceLabel.textContent = combining ? 'Photos to combine' : 'Photos to edit';
+    sourceLabel.textContent = combining ? 'Reference photos' : 'Photos to edit';
 
     promptLabel.textContent = editing ? 'What should change?' : 'What should it make?';
     promptEl.placeholder = combining
-      ? 'Describe the single picture to make — “put the person on the left into the room on the right”'
+      ? 'Say what to make from them — “her, in the room from the other photo, evening light”'
       : editing
         ? 'Describe the change — “make the background a plain warm grey”'
         : 'Describe the image — subject, setting, light, mood';
@@ -488,16 +483,15 @@
     promptEl.classList.toggle('textarea--generate', !needsPhotos);
 
     promptGuidance.textContent = combining
-      ? (state.sources.length >= 2
-          ? 'Your photos become one picture. Refer to them by position, not by file name.'
-          : 'Add two photos. They become one picture the model can see all at once.')
+      ? (state.sources.length >= 1
+          ? 'The photos are read first, then a new image is generated. Likeness is not copied.'
+          : 'Add reference photos. They are read, then a new image is generated from them.')
       : editing
         ? (state.sources.length > 1
             ? 'The same change is applied to each photo, one image back per photo.'
             : 'An edit returns one image. Run it again for another attempt.')
         : 'Plain description works better than keywords.';
 
-    renderComposite();
   }
 
   // The dropzone stays put so more photos can be added; loaded ones list below it.
@@ -538,7 +532,7 @@
     dropzoneTitle.dataset.more = count ? '1' : '';
     if (!dropzone.classList.contains('is-rejected') && !dropzone.classList.contains('is-over')) {
       dropzoneTitle.textContent = state.mode === 'combine'
-        ? (count ? 'Drop another photo here' : 'Drop two photos here')
+        ? (count ? 'Drop another reference here' : 'Drop reference photos here')
         : (count ? 'Drop more photos here' : 'Drop photos here');
     }
   }
@@ -561,8 +555,7 @@
   // -------------------------------------------------------------------------
   function actionLabel() {
     if (state.mode === 'combine') {
-      var n = state.sources.length;
-      return n > 1 ? 'Combine ' + n + ' photos' : 'Combine';
+      return state.frames > 1 ? 'Combine into ' + state.frames + ' frames' : 'Combine';
     }
     if (state.mode === 'edit') {
       var photos = state.sources.length;
@@ -575,10 +568,8 @@
     if (!config) return 'Loading the studio.';
     if (!config.hasKey) return null; // handled as a full error notice
     if (modelIsRetired(state.model)) return 'Pick a model that still accepts requests.';
-    if (state.mode === 'combine' && state.sources.length < 2) {
-      return state.sources.length === 1
-        ? 'Add a second photo to combine.'
-        : 'Add two photos to combine.';
+    if (state.mode === 'combine' && !state.sources.length) {
+      return 'Add at least one reference photo.';
     }
     if (state.mode === 'edit' && !state.sources.length) {
       return wordCount(promptEl.value) >= 3
@@ -638,9 +629,7 @@
     }
     costLine.hidden = false;
     costLabel.textContent = 'Estimated cost';
-    if (state.mode === 'combine') {
-      costValue.textContent = money(est.total) + ' · 1 image';
-    } else if (state.mode === 'edit') {
+    if (state.mode === 'edit') {
       costValue.textContent = est.count > 1
         ? money(est.total) + ' · ' + est.count + ' × ' + money(est.per + est.input)
         : money(est.total) + ' · 1 image';
@@ -824,7 +813,8 @@
     if (run.quality && acceptsQuality(run.model)) {
       chips.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     }
-    chips.push(run.mode === 'edit' ? 'Edit' : run.mode === 'combine' ? 'Combine' : sizeChipText(run));
+    if (run.mode === 'combine') chips.push('Combine');
+    chips.push(run.mode === 'edit' ? 'Edit' : sizeChipText(run));
     chips.push(countText(run));
     return chips;
   }
@@ -835,9 +825,16 @@
 
     var head = el('div', 'run__head');
     var headline = el('div', 'run__headline');
-    var promptLine = el('div', 'run__prompt', run.prompt);
-    promptLine.title = run.prompt;
+    var promptLine = el('div', 'run__prompt', run.instruction || run.prompt);
+    promptLine.title = run.instruction || run.prompt;
     headline.appendChild(promptLine);
+    if (run.instruction) {
+      // What the references were actually turned into. Shown so the result is
+      // never a mystery, and so a poor prompt can be spotted and reworded.
+      var written = el('div', 'run__written', run.prompt);
+      written.title = run.prompt;
+      headline.appendChild(written);
+    }
 
     var chipRow = el('div', 'run__chips');
     var sizeText = run.mode === 'edit' ? null : sizeChipText(run);
@@ -889,7 +886,7 @@
     card.appendChild(head);
 
     var grid = el('div', 'run__grid');
-    var ratio = (run.mode === 'edit' || run.mode === 'combine') ? null : aspectRatioCss(run.shape);
+    var ratio = run.mode === 'edit' ? null : aspectRatioCss(run.shape);
     run.frames.forEach(function (frame, i) {
       grid.appendChild(renderFrame(run, i, ratio));
     });
@@ -900,91 +897,39 @@
   // -------------------------------------------------------------------------
   // Combining
   //
-  // The edit endpoint takes exactly one source image, and testing showed that
-  // passing an array uses only the first entry — sending a green photo and a
-  // magenta one with the instruction to return the second returned the green
-  // one. So there is no way to hand the model two references directly.
+  // The image endpoints cannot take more than one reference. `image` on the
+  // edits endpoint deserialises as a single two-field struct, so an array is a
+  // struct written positionally rather than a list of pictures, and
+  // /images/generations ignores the field altogether. Compositing the photos
+  // into one picture and editing that was the first attempt; it produced poor
+  // results, because an edit endpoint edits the picture it is given.
   //
-  // Instead the photos are drawn into a single picture here, in the browser, and
-  // that one picture is sent. The model genuinely sees both, and the prompt can
-  // refer to them by position.
+  // So the references go to a chat model that accepts image input. It looks at
+  // them all at once and writes the generation prompt, and that prompt then runs
+  // through the ordinary generation path — same shapes, sizes, quality and frame
+  // counts as any other run.
   // -------------------------------------------------------------------------
-  var COMBINE_CELL = 1024;      // per-panel size before JPEG encoding
-  var COMBINE_QUALITY = 0.92;
-
-  function loadImageEl(src) {
-    return new Promise(function (resolve, reject) {
-      var img = new Image();
-      img.onload = function () { resolve(img); };
-      img.onerror = function () { reject(new Error('could not decode')); };
-      img.src = src;
+  async function describeReferences(sources, instruction) {
+    var res = await fetch('/api/describe', {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        images: sources.map(function (s) { return s.dataUri; }),
+        instruction: instruction
+      })
     });
-  }
-
-  // Two photos go side by side; three or four fill a 2x2 grid. Each is scaled to
-  // fit its panel whole — cropping to fill could cut off the very thing being
-  // referred to.
-  function compositeLayout(count) {
-    var cols = count <= 2 ? Math.max(1, count) : 2;
-    return { cols: cols, rows: Math.ceil(count / cols) };
-  }
-
-  async function buildComposite(sources) {
-    if (!sources.length) return null;
-    var imgs = await Promise.all(sources.map(function (s) { return loadImageEl(s.dataUri); }));
-    var layout = compositeLayout(imgs.length);
-
-    var canvas = document.createElement('canvas');
-    canvas.width = layout.cols * COMBINE_CELL;
-    canvas.height = layout.rows * COMBINE_CELL;
-    var ctx = canvas.getContext('2d');
-    // A white ground rather than transparency: JPEG has no alpha, and a black
-    // fill would read as part of the picture.
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    imgs.forEach(function (img, i) {
-      var cx = (i % layout.cols) * COMBINE_CELL;
-      var cy = Math.floor(i / layout.cols) * COMBINE_CELL;
-      var scale = Math.min(COMBINE_CELL / img.naturalWidth, COMBINE_CELL / img.naturalHeight);
-      var w = img.naturalWidth * scale;
-      var h = img.naturalHeight * scale;
-      ctx.drawImage(img, cx + (COMBINE_CELL - w) / 2, cy + (COMBINE_CELL - h) / 2, w, h);
-    });
-
-    return canvas.toDataURL('image/jpeg', COMBINE_QUALITY);
-  }
-
-  // Names the panels the way the prompt should, so the hint matches the picture.
-  function compositePositions(count) {
-    if (count === 2) return 'left and right';
-    if (count === 3) return 'top-left, top-right and bottom-left';
-    if (count === 4) return 'top-left, top-right, bottom-left and bottom-right';
-    return 'in order';
-  }
-
-  var compositeToken = 0;
-  async function renderComposite() {
-    if (state.mode !== 'combine' || state.sources.length < 2) {
-      compositeEl.hidden = true;
-      compositeCache = null;
-      return;
+    var payload = null;
+    try { payload = await res.json(); } catch (err) { payload = null; }
+    if (res.status === 401 && payload && payload.code === 'unauthorized') {
+      lockOut();
+      return null;
     }
-    var token = ++compositeToken;
-    try {
-      var uri = await buildComposite(state.sources);
-      if (token !== compositeToken) return; // a newer build overtook this one
-      compositeCache = uri;
-      compositePreview.src = uri;
-      compositeCaption.textContent =
-        'This is the single picture the model sees — your photos ' +
-        compositePositions(state.sources.length) + '. Refer to them by position.';
-      compositeEl.hidden = false;
-    } catch (err) {
-      if (token !== compositeToken) return;
-      compositeCache = null;
-      compositeEl.hidden = true;
+    if (!res.ok) {
+      var described = describeFailure(payload, res.status);
+      showError(described[1], described[2], described[0]);
+      return null;
     }
+    return payload;
   }
 
   // -------------------------------------------------------------------------
@@ -1418,6 +1363,7 @@
       shape: run.shape,
       resolution: run.resolution,
       n: run.frames ? run.frames.length : run.n,
+      instruction: run.instruction || null,
       sources: run.sources || []
     });
   }
@@ -1528,9 +1474,7 @@
       shape: state.shape,
       resolution: state.resolution,
       n: state.mode === 'edit' ? 1 : state.frames,
-      sources: state.mode === 'edit' ? state.sources.map(function (s) { return s.dataUri; })
-        : state.mode === 'combine' && compositeCache ? [compositeCache]
-        : []
+      sources: state.mode === 'edit' ? state.sources.map(function (s) { return s.dataUri; }) : []
     };
   }
 
@@ -1579,7 +1523,7 @@
   // Frames are requested one at a time, so the button can name the one being
   // worked on rather than the batch.
   function busyLabelFor(run) {
-    if (run.mode === 'combine') return 'Combining';
+
     if (run.mode === 'edit') {
       if (run.frames.length === 1) return 'Applying the edit';
       return 'Editing photo ' + Math.min(doneImages(run).length + 1, run.frames.length) +
@@ -1608,10 +1552,9 @@
       user: state.name || '',
       runId: run.id
     };
-    if (run.mode === 'edit' || run.mode === 'combine') {
+    if (run.mode === 'edit') {
       // The server wraps this into xAI's { url, type } shape; send the plain URI.
-      // A combine has exactly one source: the composited picture.
-      body.image = run.sources[run.mode === 'combine' ? 0 : index];
+      body.image = run.sources[index];
     } else {
       body.n = 1;
       body.aspect_ratio = run.shape;
@@ -1712,9 +1655,7 @@
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
 
-    var total = settings.mode === 'edit' ? Math.max(1, settings.sources.length)
-      : settings.mode === 'combine' ? 1
-      : settings.n;
+    var total = settings.mode === 'edit' ? Math.max(1, settings.sources.length) : settings.n;
     var frames = [];
     for (var i = 0; i < total; i++) frames.push({ status: 'queued', image: null, error: null });
 
@@ -1728,16 +1669,22 @@
       resolution: settings.resolution,
       n: total,
       sources: settings.sources || [],
+      instruction: settings.instruction || null,
+      readCost: settings.readCost || 0,
       frames: frames,
       controllers: [],
       status: 'running',
       startedAt: Date.now(),
       finishedAt: null,
-      cost: 0,
+      cost: settings.readCost || 0,
       counted: false,
       cancelled: false,
       degraded: false
     };
+
+    // The reading step is already paid for by the time we get here, so it goes
+    // on the running total straight away rather than waiting for a frame.
+    if (settings.readCost) addSpend(settings.readCost, false);
 
     clearError();
     runs.unshift(run);
@@ -2081,10 +2028,31 @@
     if (activeRun) cancelRun(activeRun);
   });
 
-  rail.addEventListener('submit', function (e) {
+  rail.addEventListener('submit', async function (e) {
     e.preventDefault();
     if (blockingReason() || busy || Date.now() < rateLimitUntil) return;
-    submitRun(currentSettings());
+
+    var settings = currentSettings();
+
+    if (settings.mode === 'combine') {
+      // Stage one: have the references read into a prompt. Cheap, but it is a
+      // network call, so the button has to say what is happening.
+      clearError();
+      setBusy(true, 'Reading the photos');
+      var read;
+      try {
+        read = await describeReferences(state.sources, settings.prompt);
+      } finally {
+        setBusy(false);
+      }
+      if (!read) return;
+
+      settings.instruction = settings.prompt;   // what the person typed
+      settings.prompt = read.prompt;            // what the model will be given
+      settings.readCost = read.cost || 0;
+    }
+
+    submitRun(settings);
   });
 
   // Cmd/Ctrl + Enter fires the action button from anywhere in the rail.

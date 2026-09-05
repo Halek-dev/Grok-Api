@@ -673,30 +673,6 @@ button, input, textarea, select { font-family: inherit; }
 .dropzone.is-rejected .dropzone__title { color: var(--danger); }
 .dropzone.is-rejected .dropzone__body  { color: var(--text); }
 
-/* The composite is the single picture the model actually receives, shown so
-   "the person on the left" is unambiguous before any money is spent. */
-.composite {
-  margin: 12px 0 0;
-  background: var(--sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 10px;
-}
-.composite img {
-  display: block;
-  width: 100%;
-  height: auto;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-}
-.composite figcaption {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin-top: 8px;
-}
-
 .source-list {
   display: flex;
   flex-direction: column;
@@ -864,6 +840,18 @@ button, input, textarea, select { font-family: inherit; }
   text-overflow: ellipsis;
 }
 .run__chips { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+/* The prompt the references were turned into, under what the person asked for. */
+.run__written {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .chip {
   background: var(--sunken);
   border: 1px solid var(--border);
