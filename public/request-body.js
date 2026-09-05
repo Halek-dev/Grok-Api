@@ -23,6 +23,9 @@
       model: run.model,
       prompt: run.prompt,
       n: 1,
+      // Which frame of the run this is, 1-based. The server records it with
+      // the saved image; without it every restored frame was "Frame 1".
+      frame: index + 1,
       aspect_ratio: run.shape || 'auto',
       resolution: run.resolution || '1k',
       user: opts.user || '',

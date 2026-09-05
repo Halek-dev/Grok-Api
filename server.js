@@ -48,6 +48,7 @@ const PROMPT_LOG_CHARS = 300;
 const imagine = require('./lib/imagine.js');
 const PRICES = imagine.PRICES;
 const QUALITY_MODELS = imagine.QUALITY_MODELS;
+const { createThrottle } = require('./lib/throttle.js');
 
 // ---------------------------------------------------------------------------
 // Config — a hand-parsed .env, because a dozen lines is not worth a dependency.
@@ -277,6 +278,23 @@ function readBody(req, limit) {
       reject(err);
     });
   });
+}
+
+// Failed password attempts are throttled per address: five free, then a delay
+// that doubles from two seconds up to fifteen minutes. The comparison below
+// defeats timing attacks; this defeats guessing. In memory, so a restart
+// forgets it, which is fine for a team tool.
+const loginThrottle = createThrottle();
+setInterval(function () { loginThrottle.prune(); }, 10 * 60 * 1000).unref();
+
+// Behind Railway or any proxy the socket address is the proxy's, and the real
+// one is the first entry of x-forwarded-for. Trusting that header means a
+// direct client could forge it, which only lets it dodge its own throttling —
+// it cannot lock anyone else out, because the same 401 is returned either way.
+function clientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim();
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
 }
 
 // crypto.timingSafeEqual throws on mismatched buffer lengths rather than
@@ -798,6 +816,16 @@ async function handleDescribe(req, res, body) {
 // ---------------------------------------------------------------------------
 // POST /api/images
 // ---------------------------------------------------------------------------
+
+// Which frame a saved image is. The client asks for one image per request and
+// says which frame it is; that number is used as sent. When a request returns
+// several images at once (n > 1 on an edit) they are numbered by their place in
+// that response instead, so no two share a number.
+function frameNumber(sent, index, count) {
+  const own = Number.isInteger(sent) && sent >= 1 ? sent : null;
+  return count === 1 && own ? own : index + 1;
+}
+
 async function handleImages(req, res, body) {
   if (!XAI_API_KEY) {
     return fail(res, 503, 'No API key on the server. Add XAI_API_KEY to .env and restart.', { code: 'no_key' });
@@ -910,7 +938,7 @@ async function handleImages(req, res, body) {
     const rec = await saveImage(images[i].b64);
     if (rec) {
       images[i].id = rec.id;
-      saved.push({ id: rec.id, frame: typeof input.frame === 'number' ? input.frame : i + 1 });
+      saved.push({ id: rec.id, frame: frameNumber(input.frame, i, images.length) });
     }
   }
   pruneImages().catch(function () { /* pruning is housekeeping, never fatal */ });
@@ -1033,8 +1061,23 @@ const server = http.createServer(async function (req, res) {
     }
 
     if (urlPath.startsWith('/api/')) {
-      if (TEAM_PASSWORD && !passwordMatches(req.headers['x-team-password'])) {
-        return fail(res, 401, 'Password not recognised.', { code: 'unauthorized' });
+      if (TEAM_PASSWORD) {
+        const ip = clientIp(req);
+        // The same 401 for a wrong password and for a throttled address, so the
+        // response never says which. A correct password during a lockout is
+        // refused too; it counts as nothing and the lockout runs its course.
+        if (loginThrottle.isBlocked(ip)) {
+          return fail(res, 401, 'Password not recognised.', { code: 'unauthorized' });
+        }
+        if (!passwordMatches(req.headers['x-team-password'])) {
+          const hit = loginThrottle.fail(ip);
+          if (hit.delayMs > 0) {
+            console.error('[auth] ' + ip + ' locked out for ' + Math.round(hit.delayMs / 1000) +
+              's after ' + hit.failures + ' failed password attempts');
+          }
+          return fail(res, 401, 'Password not recognised.', { code: 'unauthorized' });
+        }
+        loginThrottle.clear(ip);
       }
 
       if (urlPath === '/api/usage') {
@@ -1217,7 +1260,7 @@ server.listen(PORT, HOST, function () {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
   console.log('Imagine studio on http://' + shown + ':' + PORT);
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
-  console.log('  Team password     ' + (TEAM_PASSWORD ? 'required' : 'not set (anyone who can reach this port can spend credits)'));
+  console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Usage log         ' + USAGE_LOG);
   console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'

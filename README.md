@@ -99,6 +99,21 @@ has to retype it every morning.
 
 ---
 
+### Password guessing is throttled
+
+Failed password attempts are counted per address: five are free, then every
+further failure locks that address out for a delay that doubles from two
+seconds up to fifteen minutes. During a lockout every request from the address
+gets the same "Password not recognised" as a wrong password, so the response
+never says whether the address is being throttled. A correct password, when not
+locked out, clears the count. Lockouts are printed to stderr, which on Railway
+is the deploy log. The counts are in memory and a restart forgets them.
+
+This protects against guessing, and only that. It does nothing against someone
+who already has the password, and it will not stop a patient attacker forever.
+The real boundary is not putting the URL anywhere public: no link in a shared
+document, no post, no screenshot with the address in it.
+
 ## Models and prices
 
 | Model | Shown as | 1k | 2k | Per source image on edits |
@@ -276,6 +291,56 @@ ten and why the estimate grows with the number of photos.
 
 **Shape and size are sent on edits now.** Left on *Same as the base photo*, the
 output follows the first photo; pick a shape and it is honoured instead.
+
+#### The pattern that works: name each photo and say what to take from it
+
+This is the core skill for the tool and nothing in the UI teaches it. The
+model does not guess which photo is for what; the prompt says so, by number,
+in the order the photos sit in the list. The live run that verified the
+feature used three photos:
+
+1. **Photo 1, the base** — a woman with long dark hair in a black top on a
+   grey backdrop. Everything about it is kept.
+2. **Photo 2, cropped to head and shoulders** — a different woman: blonde
+   curls, green eyes.
+3. **Photo 3, the whole picture** — the second woman again, in a white
+   collared shirt. Used only for the shirt.
+
+The prompt, as sent:
+
+> Photo 1 is the base: keep its pose, framing, grey background and lighting
+> exactly. Replace only the head with the person in photo 2 — her exact face,
+> bone structure, eye colour, skin tone, hairstyle, hair length and hair
+> colour, adapted to photo 1's head angle and light. Replace the black top
+> with the white collared shirt worn in photo 3, fitted to photo 1's body.
+> Change nothing else. No other people.
+
+All five images that came back had photo 1's pose, framing and backdrop,
+photo 2's face, hair and eyes — recognisably her — and photo 3's shirt. The
+shape of the prompt is what carries it:
+
+- **Say what the base keeps**, in a list, before saying what changes. "Keep
+  its pose, framing, background and lighting exactly."
+- **Name the photo for each element by number**, and say exactly which part
+  of it to take: "the head from photo 2", "the shirt from photo 3". A photo
+  named with no part named lends whatever the model finds most salient.
+- **Say what to adapt**, so the transplanted part fits: head angle, light
+  direction, skin tone at the neck.
+- **Close with "change nothing else"**, which is what stops the background
+  and clothing drifting.
+- **Crop the reference to the part you want.** Photo 2 was cropped to the
+  head; photo 3 was left whole because the shirt needed the whole frame.
+
+Reversing the photo order reverses the result, so the badge marked *Base*
+is the one being kept.
+
+#### Variants come back very similar
+
+Four variants from one request differed only in individual curls and the exact
+eyebrow line — same face, same shirt, same framing. If a result is wrong,
+change the prompt or the crop and run once. Do not spend on four variants
+expecting four different options. The rail says the same under the *Variants*
+control.
 
 #### Permission and the likeness rule
 

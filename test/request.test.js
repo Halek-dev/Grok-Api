@@ -214,6 +214,12 @@ test('the client body never carries the retired image field', () => {
   assert.equal('images' in b, false);
 });
 
+test('every frame carries its own 1-based frame number', () => {
+  assert.equal(client.buildFrameBody(run(), 0, {}).frame, 1);
+  assert.equal(client.buildFrameBody(run(), 2, {}).frame, 3);
+  assert.equal(client.buildFrameBody(run({ mode: 'generate' }), 5, {}).frame, 6);
+});
+
 test('generation sends no sources and the shape and size chosen', () => {
   const b = client.buildFrameBody(run({ mode: 'generate', shape: '9:16', resolution: '1k' }), 0, {});
   assert.equal('sources' in b, false);

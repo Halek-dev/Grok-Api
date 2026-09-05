@@ -66,7 +66,7 @@
   var qualityField = $('quality-field'), qualityEl = $('quality'), qualityNote = $('quality-note');
   var shapeSize = $('shape-size'), shapeEl = $('shape'), sizeEl = $('size');
   var framesField = $('frames-field'), framesEl = $('frames'), framesValue = $('frames-value'),
-      framesLabel = $('frames-label'), framesMax = $('frames-max');
+      framesLabel = $('frames-label'), framesMax = $('frames-max'), framesHint = $('frames-hint');
   var sizeHint = $('size-hint');
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
@@ -527,6 +527,11 @@
     framesLabel.textContent = editing ? 'Variants' : 'Frames';
     framesEl.max = maxCount();
     framesMax.textContent = String(maxCount());
+    // Measured: four variants of one edit differed only in individual curls.
+    framesHint.hidden = !editing;
+    framesHint.textContent = editing
+      ? 'Variants of an edit come back very similar. If a result is wrong, change the prompt or the crop instead.'
+      : '';
 
     sourceLabel.textContent = reference ? 'Photos to combine' : 'Photos to edit';
 
@@ -2647,7 +2652,9 @@
           n: frames.length,
           // The photos themselves are not kept, only how many there were and
           // whether they were combined, so the card can still say so.
-          plan: r.reference ? 'reference' : 'each',
+          // Combined, or a single photo: images out. Several photos edited
+          // apart is the only case that counts photos.
+          plan: r.reference || !(r.sources > 1) ? 'reference' : 'each',
           sourceCount: typeof r.sources === 'number' ? r.sources : 0,
           sources: [],
           frames: frames,
