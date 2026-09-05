@@ -70,9 +70,7 @@
         <button class="modeswitch__btn" type="button" role="tab" id="tab-generate"
                 data-mode="generate" aria-selected="true" aria-controls="rail-fields">Generate</button>
         <button class="modeswitch__btn" type="button" role="tab" id="tab-edit"
-                data-mode="edit" aria-selected="false" aria-controls="rail-fields" tabindex="-1">Edit a photo</button>
-        <button class="modeswitch__btn" type="button" role="tab" id="tab-combine"
-                data-mode="combine" aria-selected="false" aria-controls="rail-fields" tabindex="-1">Combine</button>
+                data-mode="edit" aria-selected="false" aria-controls="rail-fields" tabindex="-1">Edit photos</button>
       </div>
 
       <div id="rail-fields" style="display:contents">
@@ -87,10 +85,39 @@
           </button>
           <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple class="visually-hidden" tabindex="-1">
 
-          <!-- One row per loaded photo. In edit mode each gets its own edit; in
-               combine mode they are all read to write one prompt. -->
+          <!-- One row per loaded photo, in sending order. Rows reorder by drag
+               or by their arrows; with two or more photos combined into one,
+               the first row is the base and carries a badge saying so. -->
           <div class="source-list" id="source-list"></div>
+          <div class="hint" id="source-hint" hidden></div>
 
+        </div>
+
+        <!-- Two or more photos are ambiguous: one image out, or one per photo.
+             The page asks rather than guesses. -->
+        <div class="field" id="plan-field" hidden>
+          <span class="label" id="plan-label">With these photos</span>
+          <div class="modeswitch modeswitch--sub" id="plan" role="radiogroup" aria-labelledby="plan-label">
+            <button class="modeswitch__btn" type="button" role="radio" id="plan-reference"
+                    data-plan="reference" aria-checked="true">Combine into one</button>
+            <button class="modeswitch__btn" type="button" role="radio" id="plan-each"
+                    data-plan="each" aria-checked="false" tabindex="-1">Edit each</button>
+          </div>
+          <div class="hint" id="plan-hint"></div>
+        </div>
+
+        <!-- Combining photos carries one person's likeness into another picture.
+             Confirmed once a session, before the first such run; the server
+             refuses a combined edit that does not carry the confirmation. -->
+        <div class="field" id="consent-field" hidden>
+          <div class="notice notice--warning">
+            <div class="notice__title">Real people, real likenesses</div>
+            <div class="notice__body">Combining puts one person’s face into another picture. Confirm once a session that you have permission from everyone shown in these photos.</div>
+            <label class="check">
+              <input type="checkbox" id="consent">
+              <span>I have permission to use every likeness in these photos</span>
+            </label>
+          </div>
         </div>
 
         <!-- Prompt -->
@@ -103,32 +130,6 @@
             <span id="prompt-guidance">Plain description works better than keywords.</span>
             <span class="num" id="prompt-count">0 / 1000</span>
           </div>
-        </div>
-
-        <!-- Combine mode only. What the photos were read into, and the only text
-             the image model receives. Editable, so a near-miss can be corrected
-             and re-run without paying to read the photos again. -->
-        <div class="field" id="written-field" hidden>
-          <label class="label" for="written">Prompt from the photos</label>
-          <textarea class="textarea textarea--edit" id="written" maxlength="1200"
-                    aria-describedby="written-hint"></textarea>
-          <div class="hint-row" id="written-hint">
-            <span id="written-note">Edit this to correct it. Running again uses your version.</span>
-            <button class="btn-text" type="button" id="written-reset" hidden>Read the photos again</button>
-          </div>
-        </div>
-
-        <!-- Combine mode only. Whether the prompt stays in the user's own words
-             with reference detail appended, or is authored by the model. -->
-        <div class="field" id="wording-field" hidden>
-          <span class="label" id="wording-label">Prompt wording</span>
-          <div class="modeswitch modeswitch--sub" id="wording" role="radiogroup" aria-labelledby="wording-label">
-            <button class="modeswitch__btn" type="button" role="radio" id="wording-keep"
-                    data-style="keep" aria-checked="true">Keep mine</button>
-            <button class="modeswitch__btn" type="button" role="radio" id="wording-rewrite"
-                    data-style="rewrite" aria-checked="false" tabindex="-1">Let it rewrite</button>
-          </div>
-          <div class="hint" id="wording-hint">Your words are used exactly as typed. The photos only add detail after them.</div>
         </div>
 
         <!-- Model -->
@@ -163,7 +164,8 @@
           <div class="hint" id="quality-hint">Higher quality costs more and takes longer.</div>
         </div>
 
-        <!-- Shape and size — generate mode only -->
+        <!-- Shape and size. Sent on edits as well: the output otherwise follows
+             the first photo, which is not what was chosen. -->
         <div class="row-2" id="shape-size">
           <div class="field">
             <label class="label" for="shape">Shape</label>
@@ -184,15 +186,18 @@
             </div>
           </div>
         </div>
+        <div class="hint hint--warning" id="size-hint" hidden></div>
 
-        <!-- Frames — removed, not disabled, in edit mode: an edit returns one image -->
+        <!-- Frames on a generation, variants on an edit (1–4: every variant
+             re-sends every source photo). Removed, not disabled, when several
+             photos are edited apart — that is one image per photo. -->
         <div class="field" id="frames-field">
           <div class="slider-head">
-            <label for="frames">Frames</label>
+            <label for="frames" id="frames-label">Frames</label>
             <span class="slider-value num is-idle" id="frames-value">1 frame</span>
           </div>
           <input class="slider on-surface" type="range" id="frames" min="1" max="10" step="1" value="1">
-          <div class="slider-scale num" aria-hidden="true"><span>1</span><span>10</span></div>
+          <div class="slider-scale num" aria-hidden="true"><span>1</span><span id="frames-max">10</span></div>
         </div>
 
         <!-- Working as — moves here from the top bar on phones -->
@@ -275,6 +280,7 @@
   </div>
 </div>
 
+<script src="/request-body.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

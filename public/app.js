@@ -31,17 +31,15 @@
 
   var RESOLUTIONS = ['1k', '2k'];
 
-  // What a reference photo contributes. Sent per photo so the reading model is
-  // told what to take from each one instead of inferring it.
-  var PHOTO_ROLES = [
-    { value: '',         label: 'Any part of it' },
-    { value: 'subject',  label: 'Subject' },
-    { value: 'setting',  label: 'Setting' },
-    { value: 'style',    label: 'Style' },
-    { value: 'pose',     label: 'Pose' },
-    { value: 'clothing', label: 'Clothing' },
-    { value: 'lighting', label: 'Lighting' }
-  ];
+  // Limits of the edits endpoint. Overwritten from /api/config at boot so the
+  // server stays the single source of truth.
+  var MAX_EDIT_SOURCES = 5;
+  var MAX_EDIT_VARIANTS = 4;
+  var MAX_FRAMES = 10;
+
+  // A reference crop is upscaled so its short side is at least this, with
+  // smoothing off — the same treatment the experiment used. Upscale only.
+  var CROP_TARGET_SHORT = 1536;
 
   var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   var ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -61,20 +59,21 @@
   var userName = $('user-name'), userNameMobile = $('user-name-mobile'), mobileWho = $('mobile-who');
   var spendAmount = $('spend-amount'), spendRuns = $('spend-runs');
   var rail = $('rail'), modeswitch = $('modeswitch');
-  var tabGenerate = $('tab-generate'), tabEdit = $('tab-edit'), tabCombine = $('tab-combine');
+  var tabGenerate = $('tab-generate'), tabEdit = $('tab-edit');
   var promptEl = $('prompt'), promptLabel = $('prompt-label'), promptCount = $('prompt-count'),
       promptGuidance = $('prompt-guidance');
   var modelEl = $('model'), modelNote = $('model-note'), retirementEl = $('retirement');
   var qualityField = $('quality-field'), qualityEl = $('quality'), qualityNote = $('quality-note');
   var shapeSize = $('shape-size'), shapeEl = $('shape'), sizeEl = $('size');
-  var framesField = $('frames-field'), framesEl = $('frames'), framesValue = $('frames-value');
+  var framesField = $('frames-field'), framesEl = $('frames'), framesValue = $('frames-value'),
+      framesLabel = $('frames-label'), framesMax = $('frames-max');
+  var sizeHint = $('size-hint');
   var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
       dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
-      sourceList = $('source-list'), sourceLabel = $('source-label');
-  var wordingField = $('wording-field'), wordingKeep = $('wording-keep'),
-      wordingRewrite = $('wording-rewrite'), wordingHint = $('wording-hint');
-  var writtenField = $('written-field'), writtenEl = $('written'),
-      writtenReset = $('written-reset'), writtenNote = $('written-note');
+      sourceList = $('source-list'), sourceLabel = $('source-label'), sourceHint = $('source-hint');
+  var planField = $('plan-field'), planSwitch = $('plan'), planReference = $('plan-reference'),
+      planEach = $('plan-each'), planHint = $('plan-hint');
+  var consentField = $('consent-field'), consentBox = $('consent');
 
   var actionBtn = $('action'), actionReason = $('action-reason'),
       costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
@@ -98,10 +97,22 @@
     shape: '9:16',
     resolution: '1k',
     frames: 1,
-    wording: 'keep',
+    // Edit mode keeps its own shape, size and count, so switching tabs never
+    // silently re-crops or re-prices the other mode's settings.
+    editShape: 'auto',
+    editResolution: '1k',
+    variants: 1,
+    // With two or more photos: 'reference' combines them into one image, the
+    // first being the base; 'each' applies the instruction to every photo.
+    plan: 'reference',
     name: '',
-    sources: [] // [{ dataUri, name, size, width, height }] — one edit per photo
+    // [{ dataUri, original, name, size, width, height, crop }] in the order
+    // they will be sent. dataUri is what goes out — the crop, if one was made.
+    sources: []
   };
+  // Confirmed once per session before the first reference edit, and sent with
+  // every reference request so the server can refuse one that lacks it.
+  var likenessConsent = false;
   var runs = [];
   var busy = false;
   var rateLimitUntil = 0;
@@ -248,20 +259,42 @@
   function perImage(model, quality, resolution, mode) {
     var tier = tierFor(model, quality, mode);
     if (!tier) return null;
-    var res = mode === 'edit' ? '1k' : resolution;
-    var v = tier[res];
+    var v = tier[resolution];
     return typeof v === 'number' ? v : null;
+  }
+
+  // The mode's own settings. Generate and edit each keep theirs.
+  function currentShape() { return state.mode === 'edit' ? state.editShape : state.shape; }
+  function currentResolution() { return state.mode === 'edit' ? state.editResolution : state.resolution; }
+  function currentCount() { return state.mode === 'edit' ? state.variants : state.frames; }
+  function maxCount() { return state.mode === 'edit' ? MAX_EDIT_VARIANTS : MAX_FRAMES; }
+
+  // Two or more photos, combined into one image: the reference edit.
+  function isReference() {
+    return state.mode === 'edit' && state.sources.length > 1 && state.plan === 'reference';
+  }
+  function isEditEach() {
+    return state.mode === 'edit' && state.sources.length > 1 && state.plan === 'each';
   }
 
   function estimate() {
     var mode = state.mode;
-    var per = perImage(state.model, state.quality, state.resolution, mode);
+    var per = perImage(state.model, state.quality, currentResolution(), mode);
     if (per == null) return null;
     var p = priceEntry(state.model);
-    var count = mode === 'edit' ? Math.max(1, state.sources.length) : state.frames;
-    // input is charged once per source image, so an edit of N photos pays it N times.
-    var input = mode === 'edit' && p && typeof p.input === 'number' ? p.input : 0;
-    return { total: (per + input) * count, per: per, count: count, input: input };
+    var input = p && typeof p.input === 'number' ? p.input : 0;
+    if (mode !== 'edit') {
+      return { total: per * state.frames, per: per, count: state.frames, input: 0 };
+    }
+    var sources = Math.max(1, state.sources.length);
+    if (isEditEach()) {
+      // One request per photo, each paying its own input charge.
+      return { total: (per + input) * sources, per: per, count: sources, input: input };
+    }
+    // One request per variant, and every request re-sends every source image,
+    // so the input charge is paid once per source per variant.
+    var perRequest = per + input * sources;
+    return { total: perRequest * state.variants, per: per, count: state.variants, input: input * sources };
   }
 
   // -------------------------------------------------------------------------
@@ -407,10 +440,12 @@
     SHAPES.forEach(function (s) {
       var opt = document.createElement('option');
       opt.value = s.value;
-      opt.textContent = s.label;
+      // On an edit, auto means the shape of the first photo — say so, because
+      // that is the one case where "auto" is a specific, predictable answer.
+      opt.textContent = s.value === 'auto' && state.mode === 'edit' ? 'Same as the base photo' : s.label;
       shapeEl.appendChild(opt);
     });
-    shapeEl.value = state.shape;
+    shapeEl.value = currentShape();
   }
 
   // Sizes are relabelled when the shape changes; both resolutions stay available,
@@ -420,10 +455,10 @@
     RESOLUTIONS.forEach(function (r) {
       var opt = document.createElement('option');
       opt.value = r;
-      opt.textContent = sizeLabel(state.shape, r);
+      opt.textContent = sizeLabel(currentShape(), r);
       sizeEl.appendChild(opt);
     });
-    sizeEl.value = state.resolution;
+    sizeEl.value = currentResolution();
   }
 
   // The design shows the open list with a price on every row, so you compare
@@ -438,7 +473,7 @@
 
     qualityEl.innerHTML = '';
     keys.forEach(function (q) {
-      var per = perImage(state.model, q, state.resolution, state.mode);
+      var per = perImage(state.model, q, currentResolution(), state.mode);
       var label = q.charAt(0).toUpperCase() + q.slice(1);
       var opt = document.createElement('option');
       opt.value = q;
@@ -462,7 +497,7 @@
     // model, the size and whether this is a generation or an edit.
     buildQualityOptions();
 
-    var per = perImage(state.model, state.quality, state.resolution, state.mode);
+    var per = perImage(state.model, state.quality, currentResolution(), state.mode);
     if (per == null) {
       qualityNote.textContent = '';
       return;
@@ -473,135 +508,462 @@
   function renderModeChrome() {
     var mode = state.mode;
     var editing = mode === 'edit';
-    var combining = mode === 'combine';
-    var needsPhotos = editing || combining;
+    var count = state.sources.length;
+    var reference = isReference();
+    var each = isEditEach();
 
-    [[tabGenerate, 'generate'], [tabEdit, 'edit'], [tabCombine, 'combine']].forEach(function (pair) {
+    [[tabGenerate, 'generate'], [tabEdit, 'edit']].forEach(function (pair) {
       var on = pair[1] === mode;
       pair[0].setAttribute('aria-selected', String(on));
       pair[0].tabIndex = on ? 0 : -1;
     });
 
-    sourceField.hidden = !needsPhotos;
-    // Only editing loses these. A combine reads the references and then runs an
-    // ordinary generation, so shape, size and frame count all still apply.
-    framesField.hidden = editing;
-    shapeSize.hidden = editing;
+    sourceField.hidden = !editing;
+    // Shape and size are sent on edits too now — the output otherwise follows
+    // the first photo, which is not what was chosen. Editing each of several
+    // photos is the one case with no count control: one image per photo.
+    shapeSize.hidden = false;
+    framesField.hidden = each;
+    framesLabel.textContent = editing ? 'Variants' : 'Frames';
+    framesEl.max = maxCount();
+    framesMax.textContent = String(maxCount());
 
-    sourceLabel.textContent = combining ? 'Reference photos' : 'Photos to edit';
-    wordingField.hidden = !combining;
-    wordingKeep.setAttribute('aria-checked', String(state.wording === 'keep'));
-    wordingRewrite.setAttribute('aria-checked', String(state.wording === 'rewrite'));
-    wordingKeep.tabIndex = state.wording === 'keep' ? 0 : -1;
-    wordingRewrite.tabIndex = state.wording === 'rewrite' ? 0 : -1;
-    wordingHint.textContent = state.wording === 'keep'
-      ? 'Your words are used exactly as typed. The photos only add detail after them.'
-      : 'The model writes the whole prompt from your photos. Reads better, but your wording is replaced.';
-    writtenField.hidden = !combining || !writtenEl.value.trim();
-    writtenReset.hidden = writtenField.hidden;
+    sourceLabel.textContent = reference ? 'Photos to combine' : 'Photos to edit';
 
-    promptLabel.textContent = editing ? 'What should change?' : 'What should it make?';
-    promptEl.placeholder = combining
-      ? 'Say what to make from them — “her, in the room from the other photo, evening light”'
+    // Two or more photos is ambiguous — one image out, or one per photo — and
+    // the page cannot guess, so it asks.
+    planField.hidden = !(editing && count > 1);
+    planReference.setAttribute('aria-checked', String(state.plan === 'reference'));
+    planEach.setAttribute('aria-checked', String(state.plan === 'each'));
+    planReference.tabIndex = state.plan === 'reference' ? 0 : -1;
+    planEach.tabIndex = state.plan === 'each' ? 0 : -1;
+    planHint.textContent = state.plan === 'reference'
+      ? 'One image out. The first photo is the base; the others lend only what the prompt asks for.'
+      : 'The same change applied to every photo — ' + count + ' images out, one per photo.';
+
+    sourceHint.hidden = !reference;
+    sourceHint.textContent = 'Everything is kept from the base — pose, clothing, background, framing, light. ' +
+      'The other photos contribute only what the prompt asks for. The order is the result: ' +
+      'drag a row, or use its arrows, to change which photo is the base.';
+
+    // Asked once a session, before the first reference edit.
+    consentField.hidden = !reference || likenessConsent;
+    consentBox.checked = likenessConsent;
+
+    // 1k was the weakest transfer of the four resolutions tried. Say so rather
+    // than let a cheaper default quietly cost the likeness.
+    var low = reference && currentResolution() === '1k';
+    sizeHint.hidden = !low;
+    sizeHint.textContent = low
+      ? '1k kept the least of the likeness in testing. 2k costs a little more and holds the face noticeably better.'
+      : '';
+
+    promptLabel.textContent = reference
+      ? 'What should it take from them?'
+      : editing ? 'What should change?' : 'What should it make?';
+    promptEl.placeholder = reference
+      ? 'Say what to take — “replace the head with the person in photo 2, keep everything else”'
       : editing
         ? 'Describe the change — “make the background a plain warm grey”'
         : 'Describe the image — subject, setting, light, mood';
-    promptEl.classList.toggle('textarea--edit', needsPhotos);
-    promptEl.classList.toggle('textarea--generate', !needsPhotos);
+    promptEl.classList.toggle('textarea--edit', editing);
+    promptEl.classList.toggle('textarea--generate', !editing);
 
-    promptGuidance.textContent = combining
-      ? (state.sources.length >= 1
-          ? 'The photos are read first, then a new image is generated. Likeness is not copied.'
-          : 'Add reference photos. They are read, then a new image is generated from them.')
+    promptGuidance.textContent = reference
+      ? 'Name photos by number. Photo 1 is the base and stays as it is unless you say otherwise.'
       : editing
-        ? (state.sources.length > 1
+        ? (count > 1
             ? 'The same change is applied to each photo, one image back per photo.'
-            : 'An edit returns one image. Run it again for another attempt.')
+            : 'An edit returns one image. Raise Variants to get several attempts in one run.')
         : 'Plain description works better than keywords.';
-
   }
 
-  // The dropzone stays put so more photos can be added; loaded ones list below it.
+  // The dropzone stays put so more photos can be added; loaded ones list below
+  // it, in sending order. With two or more photos in a reference edit the first
+  // carries a Base badge, and every row can be moved by drag or by its arrows.
+  var cropOpen = -1;   // index of the photo whose crop panel is open, or -1
+  var dragFrom = -1;   // index of the row being dragged, or -1
+
+  function dimsText(src) {
+    if (src.crop) {
+      return 'Cropped ' + src.crop.w + '×' + src.crop.h + ' → ' + src.crop.outW + '×' + src.crop.outH +
+        ' · ' + bytes(src.size);
+    }
+    return src.width ? src.width + '×' + src.height + ' · ' + bytes(src.size) : bytes(src.size);
+  }
+
+  function moveSource(from, to) {
+    if (to < 0 || to >= state.sources.length || from === to) return;
+    var item = state.sources.splice(from, 1)[0];
+    state.sources.splice(to, 0, item);
+    if (cropOpen === from) cropOpen = to;
+    else if (cropOpen !== -1 && from < cropOpen && to >= cropOpen) cropOpen -= 1;
+    else if (cropOpen !== -1 && from > cropOpen && to <= cropOpen) cropOpen += 1;
+    renderRail();
+  }
+
+  function orderButton(i, delta) {
+    var count = state.sources.length;
+    var b = el('button', 'btn-text source__order', delta < 0 ? '↑' : '↓');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Move photo ' + (i + 1) + (delta < 0 ? ' up' : ' down'));
+    b.disabled = busy || (delta < 0 ? i === 0 : i === count - 1);
+    b.addEventListener('click', function () {
+      var to = i + delta;
+      moveSource(i, to);
+      // Keep the keyboard where it was: on the same arrow of the moved row.
+      var rows = sourceList.querySelectorAll('.source');
+      var row = rows[to];
+      var next = row && row.querySelector(delta < 0 ? '[aria-label$=" up"]' : '[aria-label$=" down"]');
+      if (next && !next.disabled) next.focus();
+      else if (row) (row.querySelector('button:not(:disabled)') || dropzone).focus();
+    });
+    return b;
+  }
+
+  function wireDrag(row, i) {
+    row.addEventListener('dragstart', function (e) {
+      if (busy) { e.preventDefault(); return; }
+      dragFrom = i;
+      row.classList.add('is-dragging');
+      try { e.dataTransfer.setData('text/plain', String(i)); } catch (err) { /* older engines */ }
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragover', function (e) {
+      if (dragFrom === -1) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      var r = row.getBoundingClientRect();
+      var below = e.clientY > r.top + r.height / 2;
+      row.classList.toggle('is-target-before', !below);
+      row.classList.toggle('is-target-after', below);
+    });
+    row.addEventListener('dragleave', function () {
+      row.classList.remove('is-target-before', 'is-target-after');
+    });
+    row.addEventListener('drop', function (e) {
+      if (dragFrom === -1) return;
+      e.preventDefault();
+      var r = row.getBoundingClientRect();
+      var below = e.clientY > r.top + r.height / 2;
+      var to = i + (below ? 1 : 0);
+      if (dragFrom < to) to -= 1;
+      var from = dragFrom;
+      dragFrom = -1;
+      moveSource(from, to);
+    });
+    row.addEventListener('dragend', function () {
+      dragFrom = -1;
+      Array.prototype.slice.call(sourceList.querySelectorAll('.source')).forEach(function (n) {
+        n.classList.remove('is-dragging', 'is-target-before', 'is-target-after');
+      });
+    });
+  }
+
   function renderSource() {
     sourceList.innerHTML = '';
+    var reference = isReference();
+    var count = state.sources.length;
+
     state.sources.forEach(function (src, i) {
-      var row = el('div', 'source');
+      var isBase = reference && i === 0;
+      var row = el('div', 'source' + (isBase ? ' source--base' : ''));
+      row.draggable = !busy && count > 1;
+
+      if (count > 1) {
+        var grip = el('span', 'source__grip');
+        grip.setAttribute('aria-hidden', 'true');
+        grip.title = 'Drag to reorder';
+        row.appendChild(grip);
+      }
 
       var thumb = document.createElement('img');
       thumb.className = 'source__thumb';
       thumb.src = src.dataUri;
-      thumb.alt = 'Photo to edit: ' + src.name;
+      thumb.alt = (isBase ? 'Base photo: ' : reference ? 'Photo ' + (i + 1) + ': ' : 'Photo to edit: ') + src.name;
+      thumb.draggable = false;
       row.appendChild(thumb);
 
       var meta = el('div', 'source__meta');
-      // In combine mode the photo is numbered, because the instruction can
-      // refer to it by that number and the reading model is told the same one.
-      meta.appendChild(el('div', 'source__name',
-        (state.mode === 'combine' ? 'Photo ' + (i + 1) + ' · ' : '') + src.name));
-      meta.appendChild(el('div', 'source__dims num', src.width
-        ? src.width + '×' + src.height + ' · ' + bytes(src.size)
-        : bytes(src.size)));
-
-      // Saying what a photo is for removes the guesswork that "swap A with B"
-      // otherwise leaves.
-      if (state.mode === 'combine') {
-        var shell = el('div', 'select-shell select-shell--tiny on-sunken');
-        var sel = document.createElement('select');
-        sel.setAttribute('aria-label', 'What to use photo ' + (i + 1) + ' for');
-        sel.disabled = busy;
-        PHOTO_ROLES.forEach(function (r) {
-          var opt = document.createElement('option');
-          opt.value = r.value;
-          opt.textContent = r.label;
-          sel.appendChild(opt);
-        });
-        sel.value = src.role || '';
-        sel.addEventListener('change', function () {
-          src.role = sel.value;
-        });
-        shell.appendChild(sel);
-        var chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        chev.setAttribute('class', 'select-chevron');
-        chev.setAttribute('width', '10');
-        chev.setAttribute('height', '6');
-        chev.setAttribute('viewBox', '0 0 10 6');
-        chev.setAttribute('fill', 'none');
-        chev.setAttribute('aria-hidden', 'true');
-        chev.innerHTML = '<path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>';
-        shell.appendChild(chev);
-        meta.appendChild(shell);
+      var nameLine = el('div', 'source__name');
+      if (reference) {
+        nameLine.appendChild(el('span', 'source__badge' + (isBase ? ' source__badge--base' : ''),
+          isBase ? 'Base' : 'Photo ' + (i + 1)));
+      } else if (count > 1) {
+        nameLine.appendChild(el('span', 'source__badge', String(i + 1)));
       }
+      nameLine.appendChild(el('span', 'source__file', src.name));
+      meta.appendChild(nameLine);
+      meta.appendChild(el('div', 'source__dims num', dimsText(src)));
 
-      row.appendChild(meta);
-
-      var remove = el('button', 'btn-destructive on-sunken', 'Remove');
+      var tools = el('div', 'source__tools');
+      if (count > 1) {
+        tools.appendChild(orderButton(i, -1));
+        tools.appendChild(orderButton(i, +1));
+      }
+      // A reference contributes a face, a garment, a room; the tighter the crop
+      // the less of the rest comes with it. The base is never cropped — it is
+      // the picture being kept.
+      if (reference && !isBase) {
+        var cropBtn = el('button', 'btn-text', cropOpen === i ? 'Close crop' : (src.crop ? 'Recrop' : 'Crop'));
+        cropBtn.type = 'button';
+        cropBtn.disabled = busy;
+        cropBtn.setAttribute('aria-expanded', String(cropOpen === i));
+        cropBtn.addEventListener('click', function () {
+          cropOpen = cropOpen === i ? -1 : i;
+          renderSource();
+          var panel = sourceList.querySelector('.cropper__stage');
+          if (panel) panel.focus();
+        });
+        tools.appendChild(cropBtn);
+        if (src.crop) {
+          var uncrop = el('button', 'btn-text', 'Use whole photo');
+          uncrop.type = 'button';
+          uncrop.disabled = busy;
+          uncrop.addEventListener('click', function () { clearCrop(src); renderRail(); });
+          tools.appendChild(uncrop);
+        }
+      }
+      var remove = el('button', 'btn-text btn-text--danger', 'Remove');
       remove.type = 'button';
       remove.setAttribute('aria-label', 'Remove ' + src.name);
       remove.disabled = busy;
       remove.addEventListener('click', function () {
         state.sources.splice(i, 1);
+        if (cropOpen === i) cropOpen = -1;
+        else if (cropOpen > i) cropOpen -= 1;
         resetDropzone();
         renderRail();
-        (state.sources.length ? sourceList.querySelector('button') : dropzone).focus();
+        (state.sources.length ? sourceList.querySelector('button:not(:disabled)') : dropzone).focus();
       });
-      row.appendChild(remove);
+      tools.appendChild(remove);
+      meta.appendChild(tools);
+      row.appendChild(meta);
 
+      if (count > 1) wireDrag(row, i);
       sourceList.appendChild(row);
+
+      if (cropOpen === i && reference && !isBase) sourceList.appendChild(renderCropper(src, i));
     });
 
-    var count = state.sources.length;
     dropzoneTitle.dataset.more = count ? '1' : '';
     if (!dropzone.classList.contains('is-rejected') && !dropzone.classList.contains('is-over')) {
-      dropzoneTitle.textContent = state.mode === 'combine'
-        ? (count ? 'Drop another reference here' : 'Drop reference photos here')
-        : (count ? 'Drop more photos here' : 'Drop photos here');
+      dropzoneTitle.textContent = count ? 'Drop more photos here' : 'Drop photos here';
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Cropping a reference. Drag a box on the photo; arrow keys nudge it, Shift
+  // with arrows resizes it, Enter applies, Escape closes. The crop is cut from
+  // the untouched original and upscaled with smoothing off, so nothing is
+  // blurred on the way in.
+  // -------------------------------------------------------------------------
+  function clearCrop(src) {
+    if (!src.crop) return;
+    src.dataUri = src.original;
+    src.size = src.originalSize;
+    src.crop = null;
+  }
+
+  function applyCrop(src, rect) {
+    return new Promise(function (resolve) {
+      var im = new Image();
+      im.onload = function () {
+        var x = Math.max(0, Math.round(rect.x)), y = Math.max(0, Math.round(rect.y));
+        var w = Math.max(8, Math.min(im.naturalWidth - x, Math.round(rect.w)));
+        var h = Math.max(8, Math.min(im.naturalHeight - y, Math.round(rect.h)));
+        var scale = Math.max(1, CROP_TARGET_SHORT / Math.min(w, h));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        var ctx = canvas.getContext('2d');
+        // Nearest-neighbour. A smoothed upscale softens exactly the detail a
+        // reference is there to supply.
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(im, x, y, w, h, 0, 0, canvas.width, canvas.height);
+        var out;
+        try {
+          out = canvas.toDataURL('image/jpeg', 0.95);
+        } catch (err) {
+          resolve(false);
+          return;
+        }
+        if (!src.original) { src.original = src.dataUri; src.originalSize = src.size; }
+        src.dataUri = out;
+        src.size = Math.round((out.length - out.indexOf(',') - 1) * 0.75);
+        src.crop = { x: x, y: y, w: w, h: h, outW: canvas.width, outH: canvas.height, scale: Math.round(scale * 100) / 100 };
+        resolve(true);
+      };
+      im.onerror = function () { resolve(false); };
+      im.src = src.original || src.dataUri;
+    });
+  }
+
+  function renderCropper(src, i) {
+    var panel = el('div', 'cropper');
+    var stage = el('div', 'cropper__stage');
+    stage.tabIndex = 0;
+    stage.setAttribute('role', 'application');
+    stage.setAttribute('aria-label', 'Crop photo ' + (i + 1) + '. Drag to draw a box around the face. ' +
+      'Arrow keys move the box, Shift with arrows resizes it, Enter applies, Escape closes.');
+    var img = document.createElement('img');
+    img.className = 'cropper__img';
+    img.src = src.original || src.dataUri;
+    img.alt = '';
+    img.draggable = false;
+    stage.appendChild(img);
+    var box = el('div', 'cropper__box');
+    box.hidden = true;
+    stage.appendChild(box);
+    panel.appendChild(stage);
+
+    var note = el('div', 'hint cropper__note');
+    panel.appendChild(note);
+
+    var actions = el('div', 'cropper__actions');
+    var apply = el('button', 'btn-quiet', 'Use this crop');
+    apply.type = 'button';
+    var cancel = el('button', 'btn-text', 'Close');
+    cancel.type = 'button';
+    actions.appendChild(apply);
+    actions.appendChild(cancel);
+    panel.appendChild(actions);
+
+    // The box lives in the photo's own pixels; only painting converts to screen.
+    var natW = src.width || 0, natH = src.height || 0;
+    var rect = src.crop ? { x: src.crop.x, y: src.crop.y, w: src.crop.w, h: src.crop.h } : null;
+
+    function scale() { return img.clientWidth && natW ? img.clientWidth / natW : 1; }
+
+    function paint() {
+      var has = Boolean(rect && rect.w >= 8 && rect.h >= 8);
+      box.hidden = !has;
+      apply.disabled = !has || busy;
+      if (has) {
+        var k = scale();
+        box.style.left = (rect.x * k) + 'px';
+        box.style.top = (rect.y * k) + 'px';
+        box.style.width = (rect.w * k) + 'px';
+        box.style.height = (rect.h * k) + 'px';
+        var short = Math.min(Math.round(rect.w), Math.round(rect.h));
+        var up = Math.max(1, CROP_TARGET_SHORT / short);
+        note.textContent = Math.round(rect.w) + '×' + Math.round(rect.h) + ' px' +
+          (up > 1 ? ', sharpened up ' + (Math.round(up * 10) / 10) + '× on send' : ', sent as is') +
+          '. Head and shoulders, nothing else, worked best.';
+      } else {
+        note.textContent = 'Drag a box around the face — head and shoulders, nothing else. A tight crop transferred better in testing.';
+      }
+    }
+
+    function clamp() {
+      if (!rect) return;
+      rect.w = Math.max(8, Math.min(natW, rect.w));
+      rect.h = Math.max(8, Math.min(natH, rect.h));
+      rect.x = Math.max(0, Math.min(natW - rect.w, rect.x));
+      rect.y = Math.max(0, Math.min(natH - rect.h, rect.y));
+    }
+
+    function toImage(e) {
+      var r = img.getBoundingClientRect();
+      var k = scale();
+      return {
+        x: Math.max(0, Math.min(natW, (e.clientX - r.left) / k)),
+        y: Math.max(0, Math.min(natH, (e.clientY - r.top) / k))
+      };
+    }
+
+    // Pointer: press inside the box to move it, anywhere else to draw a new one.
+    var gesture = null;
+    stage.addEventListener('pointerdown', function (e) {
+      if (busy || e.button !== 0 || !natW) return;
+      e.preventDefault();
+      stage.focus();
+      var p = toImage(e);
+      var inside = rect && p.x >= rect.x && p.x <= rect.x + rect.w && p.y >= rect.y && p.y <= rect.y + rect.h;
+      gesture = inside
+        ? { kind: 'move', px: p.x, py: p.y, ox: rect.x, oy: rect.y }
+        : { kind: 'draw', px: p.x, py: p.y };
+      if (!inside) rect = { x: p.x, y: p.y, w: 0, h: 0 };
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
+    });
+    stage.addEventListener('pointermove', function (e) {
+      if (!gesture) return;
+      var p = toImage(e);
+      if (gesture.kind === 'move') {
+        rect.x = gesture.ox + (p.x - gesture.px);
+        rect.y = gesture.oy + (p.y - gesture.py);
+      } else {
+        rect = {
+          x: Math.min(gesture.px, p.x), y: Math.min(gesture.py, p.y),
+          w: Math.abs(p.x - gesture.px), h: Math.abs(p.y - gesture.py)
+        };
+      }
+      clamp();
+      paint();
+    });
+    function endGesture() { gesture = null; paint(); }
+    stage.addEventListener('pointerup', endGesture);
+    stage.addEventListener('pointercancel', endGesture);
+
+    stage.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); cropOpen = -1; renderSource(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); if (!apply.disabled) apply.click(); return; }
+      var dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      var dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (!dx && !dy) return;
+      e.preventDefault();
+      var step = Math.max(1, Math.round(natW / 100));
+      if (!rect) {
+        // Start from a centred box a third of the photo wide.
+        var w0 = Math.round(natW / 3), h0 = Math.round(w0 * 1.15);
+        rect = { x: Math.round((natW - w0) / 2), y: Math.round((natH - h0) / 2), w: w0, h: h0 };
+      } else if (e.shiftKey) {
+        rect.w += dx * step;
+        rect.h += dy * step;
+      } else {
+        rect.x += dx * step;
+        rect.y += dy * step;
+      }
+      clamp();
+      paint();
+    });
+
+    apply.addEventListener('click', function () {
+      if (!rect || busy) return;
+      apply.disabled = true;
+      apply.textContent = 'Cropping';
+      applyCrop(src, rect).then(function (ok) {
+        cropOpen = -1;
+        renderRail();
+        if (!ok) {
+          showError('That crop could not be made',
+            'The photo did not draw onto a canvas — it may be damaged. Try exporting it again.', 'danger');
+        }
+        var row = sourceList.querySelectorAll('.source')[i];
+        var back = row && row.querySelector('button:not(:disabled)');
+        if (back) back.focus();
+      });
+    });
+    cancel.addEventListener('click', function () {
+      cropOpen = -1;
+      renderSource();
+      var row = sourceList.querySelectorAll('.source')[i];
+      var back = row && row.querySelector('button:not(:disabled)');
+      if (back) back.focus();
+    });
+
+    img.addEventListener('load', paint);
+    if (!natW) {
+      img.addEventListener('load', function () { natW = img.naturalWidth; natH = img.naturalHeight; paint(); });
+    }
+    paint();
+    return panel;
   }
 
   function resetDropzone() {
     dropzone.classList.remove('is-rejected', 'is-over');
-    dropzoneTitle.textContent = 'Drop a photo here';
-    dropzoneBody.innerHTML = 'Or <span class="dropzone__link">choose a file</span>. JPG, PNG or WebP, up to 10 MB.';
+    dropzoneTitle.textContent = state.sources.length ? 'Drop more photos here' : 'Drop photos here';
+    dropzoneBody.innerHTML = 'Or <span class="dropzone__link">choose files</span>. JPG, PNG or WebP, up to 10 MB each.';
   }
 
   function rejectDrop(title, body) {
@@ -615,12 +977,12 @@
   // The action button: label, enabled state, reason, cost line
   // -------------------------------------------------------------------------
   function actionLabel() {
-    if (state.mode === 'combine') {
-      return state.frames > 1 ? 'Combine into ' + state.frames + ' frames' : 'Combine';
-    }
     if (state.mode === 'edit') {
       var photos = state.sources.length;
-      return photos > 1 ? 'Apply edit to ' + photos + ' photos' : 'Apply edit';
+      var v = state.variants;
+      if (isEditEach()) return 'Apply edit to ' + photos + ' photos';
+      if (isReference()) return v > 1 ? 'Combine into ' + v + ' variants' : 'Combine into one';
+      return v > 1 ? 'Apply edit, ' + v + ' variants' : 'Apply edit';
     }
     return state.frames > 1 ? 'Generate ' + state.frames + ' frames' : 'Generate';
   }
@@ -629,20 +991,27 @@
     if (!config) return 'Loading the studio.';
     if (!config.hasKey) return null; // handled as a full error notice
     if (modelIsRetired(state.model)) return 'Pick a model that still accepts requests.';
-    if (state.mode === 'combine' && !state.sources.length) {
-      return 'Add at least one reference photo.';
-    }
     if (state.mode === 'edit' && !state.sources.length) {
       return wordCount(promptEl.value) >= 3
         ? 'Add a photo to edit.'
         : 'Add a photo and describe the change.';
     }
+    if (isReference() && state.sources.length > MAX_EDIT_SOURCES) {
+      var extra = state.sources.length - MAX_EDIT_SOURCES;
+      return 'Combining takes up to ' + MAX_EDIT_SOURCES + ' photos. Remove ' + extra +
+        (extra === 1 ? '' : ' of them') + ', or switch to Edit each.';
+    }
     if (!promptEl.value.trim()) {
-      return state.mode === 'edit'
-        ? 'Describe the change you want.'
-        : 'Write a prompt to start. Nothing is charged until you generate.';
+      return isReference()
+        ? 'Say what to take from the other photos.'
+        : state.mode === 'edit'
+          ? 'Describe the change you want.'
+          : 'Write a prompt to start. Nothing is charged until you generate.';
     }
     if (wordCount(promptEl.value) < 3) return 'A prompt needs at least three words.';
+    if (isReference() && !likenessConsent) {
+      return 'Confirm you have permission to use these likenesses.';
+    }
     return null;
   }
 
@@ -691,6 +1060,8 @@
     costLine.hidden = false;
     costLabel.textContent = 'Estimated cost';
     if (state.mode === 'edit') {
+      // est.input is the whole input charge for one request — every source it
+      // carries — so per request is the output price plus that.
       costValue.textContent = est.count > 1
         ? money(est.total) + ' · ' + est.count + ' × ' + money(est.per + est.input)
         : money(est.total) + ' · 1 image';
@@ -703,13 +1074,16 @@
   function renderRail() {
     renderModeChrome();
     renderQuality();
+    buildShapeOptions();
     buildSizeOptions();
     renderRetirement();
     renderSource();
-    framesValue.textContent = state.frames + (state.frames === 1 ? ' frame' : ' frames');
-    framesValue.classList.toggle('is-idle', state.frames === 1);
-    framesEl.value = state.frames;
-    framesEl.style.setProperty('--fill', ((state.frames - 1) / 9 * 100) + '%');
+    var count = currentCount();
+    var word = state.mode === 'edit' ? ' variant' : ' frame';
+    framesValue.textContent = count + (count === 1 ? word : word + 's');
+    framesValue.classList.toggle('is-idle', count === 1);
+    framesEl.value = count;
+    framesEl.style.setProperty('--fill', ((count - 1) / (maxCount() - 1) * 100) + '%');
     promptCount.textContent = promptEl.value.length + ' / 1000';
     renderAction();
     persist();
@@ -722,7 +1096,9 @@
       shape: state.shape,
       resolution: state.resolution,
       frames: state.frames,
-      wording: state.wording,
+      editShape: state.editShape,
+      editResolution: state.editResolution,
+      variants: state.variants,
       name: state.name
     });
   }
@@ -777,6 +1153,14 @@
     if (code === 'network') {
       return ['danger', 'Could not reach xAI',
         message + ' This is the server’s connection, not yours. Retry, and if it keeps failing post in #design-ops.'];
+    }
+    if (code === 'consent_required') {
+      return ['danger', 'Confirm permission first',
+        'Combining photos uses real people’s likenesses. Tick the confirmation under the photos, then run it again. Nothing was charged.'];
+    }
+    if (code === 'likeness_policy') {
+      return ['danger', 'This studio will not make that',
+        message + ' Nothing was charged.'];
     }
     if (code === 'too_large') {
       return ['danger', 'That photo is too large',
@@ -838,7 +1222,8 @@
     var total = run.frames.length;
     var got = doneImages(run).length;
     var text;
-    var word = run.mode === 'edit' ? ' photo' : ' image';
+    // Editing photos apart counts photos; everything else counts images out.
+    var word = run.mode === 'edit' && run.plan === 'each' ? ' photo' : ' image';
     if (run.status === 'running' || got === total) {
       text = total + (total === 1 ? word : word + 's');
     } else {
@@ -846,7 +1231,8 @@
       text = got + ' of ' + total + word + 's';
     }
     if (run.status !== 'running' && typeof run.cost === 'number' && run.cost > 0) {
-      text += ' · ' + money(run.cost);
+      // A tilde means the server had to estimate: xAI sent no usage block.
+      text += ' · ' + (run.costEstimated ? '≈' : '') + money(run.cost);
     }
     return text;
   }
@@ -875,8 +1261,11 @@
     if (run.quality && acceptsQuality(run.model)) {
       chips.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     }
-    if (run.mode === 'combine') chips.push('Combine');
-    chips.push(run.mode === 'edit' ? 'Edit' : sizeChipText(run));
+    if (run.mode === 'edit') {
+      var nSrc = run.sourceCount || (run.sources ? run.sources.length : 0);
+      chips.push(run.plan === 'reference' && nSrc > 1 ? 'Combined ' + nSrc + ' photos' : 'Edit');
+    }
+    chips.push(sizeChipText(run));
     chips.push(countText(run));
     return chips;
   }
@@ -887,19 +1276,12 @@
 
     var head = el('div', 'run__head');
     var headline = el('div', 'run__headline');
-    var promptLine = el('div', 'run__prompt', run.instruction || run.prompt);
-    promptLine.title = run.instruction || run.prompt;
+    var promptLine = el('div', 'run__prompt', run.prompt);
+    promptLine.title = run.prompt;
     headline.appendChild(promptLine);
-    if (run.instruction) {
-      // What the references were actually turned into. Shown so the result is
-      // never a mystery, and so a poor prompt can be spotted and reworded.
-      var written = el('div', 'run__written', run.prompt);
-      written.title = run.prompt;
-      headline.appendChild(written);
-    }
 
     var chipRow = el('div', 'run__chips');
-    var sizeText = run.mode === 'edit' ? null : sizeChipText(run);
+    var sizeText = sizeChipText(run);
     chipsFor(run).forEach(function (text, i) {
       var chip = el('span', 'chip' + (i >= 2 ? ' num' : ''), text);
       // Tagged so the first image can correct it to real dimensions on load.
@@ -948,7 +1330,7 @@
     card.appendChild(head);
 
     var grid = el('div', 'run__grid');
-    var ratio = run.mode === 'edit' ? null : aspectRatioCss(run.shape);
+    var ratio = aspectRatioCss(run.shape);
     run.frames.forEach(function (frame, i) {
       grid.appendChild(renderFrame(run, i, ratio));
     });
@@ -957,85 +1339,47 @@
   }
 
   // -------------------------------------------------------------------------
-  // Combining
-  //
-  // The image endpoints cannot take more than one reference. `image` on the
-  // edits endpoint deserialises as a single two-field struct, so an array is a
-  // struct written positionally rather than a list of pictures, and
-  // /images/generations ignores the field altogether. Compositing the photos
-  // into one picture and editing that was the first attempt; it produced poor
-  // results, because an edit endpoint edits the picture it is given.
-  //
-  // So the references go to a chat model that accepts image input. It looks at
-  // them all at once and writes the generation prompt, and that prompt then runs
-  // through the ordinary generation path — same shapes, sizes, quality and frame
-  // counts as any other run.
+  // Two or more photos: combine into one, or edit each
   // -------------------------------------------------------------------------
-  // Puts the written prompt on screen and reveals the field. Kept in one place
-  // so every path that produces a prompt shows it the same way.
-  function setWrittenPrompt(text) {
-    writtenEl.value = text || '';
-    writtenField.hidden = state.mode !== 'combine' || !writtenEl.value.trim();
-    writtenReset.hidden = writtenField.hidden;
-    renderAction();
+  function setPlan(plan) {
+    if (busy) return;
+    state.plan = plan === 'each' ? 'each' : 'reference';
+    cropOpen = -1;
+    renderRail();
   }
 
-  // Clearing it means the next run reads the photos afresh.
-  [wordingKeep, wordingRewrite].forEach(function (btn) {
+  [planReference, planEach].forEach(function (btn) {
     btn.addEventListener('click', function () {
-      if (busy) return;
-      var next = btn.dataset.style;
-      if (state.wording === next) return;
-      state.wording = next;
-      // A prompt built the other way no longer matches the setting.
-      setWrittenPrompt('');
-      renderRail();
+      setPlan(btn.dataset.plan);
       btn.focus();
     });
   });
 
-  $('wording').addEventListener('keydown', function (e) {
+  planSwitch.addEventListener('keydown', function (e) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
-    var next = state.wording === 'keep' ? 'rewrite' : 'keep';
-    state.wording = next;
-    setWrittenPrompt('');
+    var next = state.plan === 'reference' ? 'each' : 'reference';
+    setPlan(next);
+    (next === 'reference' ? planReference : planEach).focus();
+  });
+
+  consentBox.addEventListener('change', function () {
+    likenessConsent = consentBox.checked;
     renderRail();
-    (next === 'keep' ? wordingKeep : wordingRewrite).focus();
   });
 
-  writtenReset.addEventListener('click', function () {
-    setWrittenPrompt('');
-    promptEl.focus();
-  });
-
-  writtenEl.addEventListener('input', function () {
-    writtenNote.textContent = 'Edit this to correct it. Running again uses your version.';
-  });
-
-  async function describeReferences(sources, instruction) {
-    var res = await fetch('/api/describe', {
-      method: 'POST',
-      headers: authHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        images: sources.map(function (s) { return s.dataUri; }),
-        roles: sources.map(function (s) { return s.role || ''; }),
-        style: state.wording,
-        instruction: instruction
-      })
-    });
-    var payload = null;
-    try { payload = await res.json(); } catch (err) { payload = null; }
-    if (res.status === 401 && payload && payload.code === 'unauthorized') {
-      lockOut();
-      return null;
+  // The first time a second photo lands, the settings the experiment found
+  // best become the defaults: Imagine 2.0 at 2k. Only on that crossing — a
+  // choice made afterwards stands.
+  function adoptReferenceDefaults() {
+    var prices = config && config.prices ? config.prices : {};
+    var preferred = 'grok-imagine-image-2.0';
+    if (prices[preferred] && !modelIsRetired(preferred)) {
+      state.model = preferred;
+      retiredFallback = null;
+      buildModelOptions();
     }
-    if (!res.ok) {
-      var described = describeFailure(payload, res.status);
-      showError(described[1], described[2], described[0]);
-      return null;
-    }
-    return payload;
+    state.editResolution = '2k';
   }
 
   // -------------------------------------------------------------------------
@@ -1354,8 +1698,7 @@
   function refreshFrame(run, index) {
     var node = results.querySelector('[data-frame-for="' + run.id + ':' + index + '"]');
     if (!node) return;
-    var ratio = run.mode === 'edit' ? null : aspectRatioCss(run.shape);
-    node.replaceWith(renderFrame(run, index, ratio));
+    node.replaceWith(renderFrame(run, index, aspectRatioCss(run.shape)));
   }
 
   function refreshRunHeader(run) {
@@ -1445,11 +1788,15 @@
 
     state.sources = [{
       dataUri: dataUri,
+      original: dataUri,
+      originalSize: image.bytes || 0,
       name: imageFileName(run, image),
       size: image.bytes || 0,
       width: image.width || 0,
-      height: image.height || 0
+      height: image.height || 0,
+      crop: null
     }];
+    cropOpen = -1;
     setMode('edit');
     resetDropzone();
     clearError();
@@ -1469,7 +1816,7 @@
       shape: run.shape,
       resolution: run.resolution,
       n: run.frames ? run.frames.length : run.n,
-      instruction: run.instruction || null,
+      plan: run.plan || 'reference',
       sources: run.sources || []
     });
   }
@@ -1507,7 +1854,7 @@
     }
     // Real dimensions once the image has loaded; the rail estimate only until then.
     if (image.width) meta.push(image.width + '×' + image.height);
-    else if (run.mode !== 'edit') meta.push(sizeLabel(run.shape, run.resolution));
+    else meta.push(sizeLabel(run.shape, run.resolution));
     lbMeta.textContent = meta.join(' · ');
 
     lbImage.src = image.src;
@@ -1572,15 +1919,19 @@
   // Submitting a run
   // -------------------------------------------------------------------------
   function currentSettings() {
+    var editing = state.mode === 'edit';
     return {
       mode: state.mode,
       model: state.model,
       prompt: promptEl.value.trim(),
       quality: acceptsQuality(state.model) ? state.quality : null,
-      shape: state.shape,
-      resolution: state.resolution,
-      n: state.mode === 'edit' ? 1 : state.frames,
-      sources: state.mode === 'edit' ? state.sources.map(function (s) { return s.dataUri; }) : []
+      shape: currentShape(),
+      resolution: currentResolution(),
+      n: currentCount(),
+      // One photo is a reference edit of one — the same request shape, with
+      // the singular field chosen by the server.
+      plan: isEditEach() ? 'each' : 'reference',
+      sources: editing ? state.sources.map(function (s) { return s.dataUri; }) : []
     };
   }
 
@@ -1589,6 +1940,9 @@
     modeswitch.classList.toggle('is-disabled', on);
     tabGenerate.disabled = on;
     tabEdit.disabled = on;
+    planReference.disabled = on;
+    planEach.disabled = on;
+    consentBox.disabled = on;
     promptEl.disabled = on;
     modelEl.disabled = on;
     qualityEl.disabled = on;
@@ -1606,9 +1960,7 @@
       setBusyLabel(label);
       actionReason.hidden = true;
       costLine.hidden = false;
-      costLabel.textContent = state.mode === 'edit' ? 'Charged as photos arrive'
-        : state.mode === 'combine' ? 'Charged on completion'
-        : 'Charged as frames arrive';
+      costLabel.textContent = state.mode === 'edit' ? 'Charged as images arrive' : 'Charged as frames arrive';
       var est = estimate();
       costValue.textContent = est ? money(est.total) : 'unknown';
       promptGuidance.textContent = 'Locked while a run is in flight.';
@@ -1629,15 +1981,16 @@
   // Frames are requested one at a time, so the button can name the one being
   // worked on rather than the batch.
   function busyLabelFor(run) {
-
-    if (run.mode === 'edit') {
-      if (run.frames.length === 1) return 'Applying the edit';
-      return 'Editing photo ' + Math.min(doneImages(run).length + 1, run.frames.length) +
-        ' of ' + run.frames.length;
-    }
     var got = doneImages(run).length;
     var total = run.frames.length;
-    return 'Generating frame ' + Math.min(got + 1, total) + ' of ' + total;
+    var at = Math.min(got + 1, total);
+    if (run.mode === 'edit') {
+      if (run.plan === 'each' && total > 1) return 'Editing photo ' + at + ' of ' + total;
+      var combining = run.plan === 'reference' && run.sources && run.sources.length > 1;
+      if (total === 1) return combining ? 'Combining the photos' : 'Applying the edit';
+      return (combining ? 'Combining, variant ' : 'Variant ') + at + ' of ' + total;
+    }
+    return 'Generating frame ' + at + ' of ' + total;
   }
 
   // Ask xAI for one image per request rather than one request for many.
@@ -1651,22 +2004,14 @@
   var FRAME_CONCURRENCY = 3;
 
   function requestOneFrame(run, index) {
-    var body = {
-      mode: run.mode,
-      model: run.model,
-      prompt: run.prompt,
+    // The body is built in request-body.js, shared with the tests, so what is
+    // sent for one photo, several photos combined, or several edited apart is
+    // checked without a browser. The server maps `sources` onto xAI's singular
+    // or plural field.
+    var body = window.ImagineRequest.buildFrameBody(run, index, {
       user: state.name || '',
-      runId: run.id
-    };
-    if (run.mode === 'edit') {
-      // The server wraps this into xAI's { url, type } shape; send the plain URI.
-      body.image = run.sources[index];
-    } else {
-      body.n = 1;
-      body.aspect_ratio = run.shape;
-      body.resolution = run.resolution;
-    }
-    if (run.quality) body.quality = run.quality;
+      consent: likenessConsent
+    });
 
     var headers = { 'content-type': 'application/json' };
     if (password) headers['x-team-password'] = password;
@@ -1735,6 +2080,7 @@
 
     var cost = typeof result.payload.cost === 'number' ? result.payload.cost : 0;
     run.cost = (run.cost || 0) + cost;
+    if (result.payload.costEstimated) run.costEstimated = true;
     // Money is spent the moment a frame arrives, so it is counted then. The run
     // itself is only counted once, on its first frame.
     addSpend(cost, !run.counted);
@@ -1761,7 +2107,11 @@
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
 
-    var total = settings.mode === 'edit' ? Math.max(1, settings.sources.length) : settings.n;
+    // Editing each of several photos is one request per photo; everything
+    // else — generation, one photo, photos combined — is one per frame asked for.
+    var total = settings.mode === 'edit' && settings.plan === 'each'
+      ? Math.max(1, settings.sources.length)
+      : Math.max(1, settings.n || 1);
     var frames = [];
     for (var i = 0; i < total; i++) frames.push({ status: 'queued', image: null, error: null });
 
@@ -1774,23 +2124,19 @@
       shape: settings.shape,
       resolution: settings.resolution,
       n: total,
+      plan: settings.plan || 'reference',
       sources: settings.sources || [],
-      instruction: settings.instruction || null,
-      readCost: settings.readCost || 0,
       frames: frames,
       controllers: [],
       status: 'running',
       startedAt: Date.now(),
       finishedAt: null,
-      cost: settings.readCost || 0,
+      cost: 0,
+      costEstimated: false,
       counted: false,
       cancelled: false,
       degraded: false
     };
-
-    // The reading step is already paid for by the time we get here, so it goes
-    // on the running total straight away rather than waiting for a frame.
-    if (settings.readCost) addSpend(settings.readCost, false);
 
     clearError();
     runs.unshift(run);
@@ -1928,22 +2274,20 @@
   // -------------------------------------------------------------------------
   function setMode(mode) {
     if (busy) return;
-    state.mode = (mode === 'edit' || mode === 'combine') ? mode : 'generate';
+    state.mode = mode === 'edit' ? 'edit' : 'generate';
     renderRail();
   }
 
-  [tabGenerate, tabEdit, tabCombine].forEach(function (tab) {
+  [tabGenerate, tabEdit].forEach(function (tab) {
     tab.addEventListener('click', function () { setMode(tab.dataset.mode); });
   });
 
   modeswitch.addEventListener('keydown', function (e) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
-    var order = ['generate', 'edit', 'combine'];
-    var step = e.key === 'ArrowRight' ? 1 : -1;
-    var next = order[(order.indexOf(state.mode) + step + order.length) % order.length];
+    var next = state.mode === 'generate' ? 'edit' : 'generate';
     setMode(next);
-    ({ generate: tabGenerate, edit: tabEdit, combine: tabCombine })[next].focus();
+    (next === 'edit' ? tabEdit : tabGenerate).focus();
   });
 
   // -------------------------------------------------------------------------
@@ -1957,8 +2301,8 @@
       e.preventDefault();
       dropzone.classList.remove('is-rejected');
       dropzone.classList.add('is-over');
-      dropzoneTitle.textContent = 'Release to use this photo';
-      dropzoneBody.textContent = 'One photo at a time.';
+      dropzoneTitle.textContent = 'Release to add';
+      dropzoneBody.textContent = 'JPG, PNG or WebP, up to 10 MB each.';
     });
   });
 
@@ -2000,11 +2344,13 @@
         var dataUri = String(reader.result);
         var probe = new Image();
         probe.onload = function () {
-          resolve({ dataUri: dataUri, name: file.name, size: file.size,
+          resolve({ dataUri: dataUri, original: dataUri, originalSize: file.size, crop: null,
+                    name: file.name, size: file.size,
                     width: probe.naturalWidth, height: probe.naturalHeight });
         };
         probe.onerror = function () {
-          resolve({ dataUri: dataUri, name: file.name, size: file.size, width: 0, height: 0 });
+          resolve({ dataUri: dataUri, original: dataUri, originalSize: file.size, crop: null,
+                    name: file.name, size: file.size, width: 0, height: 0 });
         };
         probe.src = dataUri;
       };
@@ -2050,8 +2396,10 @@
       accepted.push(f);
     }
 
+    var before = state.sources.length;
     var loaded = await Promise.all(accepted.map(readOneFile));
     loaded.forEach(function (src) { if (src) state.sources.push(src); });
+    if (before < 2 && state.sources.length >= 2 && state.plan === 'reference') adoptReferenceDefaults();
 
     if (loaded.some(function (s) { return !s; }) && !rejected) {
       rejected = ['A photo could not be read',
@@ -2060,8 +2408,6 @@
 
     if (rejected) rejectDrop(rejected[0], rejected[1]);
     else { resetDropzone(); clearError(); }
-    // A prompt written from the old set of photos no longer describes this one.
-    if (state.mode === 'combine' && writtenEl.value.trim()) setWrittenPrompt('');
     renderRail();
   }
 
@@ -2087,18 +2433,23 @@
   });
 
   shapeEl.addEventListener('change', function () {
-    state.shape = shapeEl.value;
+    if (state.mode === 'edit') state.editShape = shapeEl.value; else state.shape = shapeEl.value;
     renderRail();
   });
 
   sizeEl.addEventListener('change', function () {
-    state.resolution = sizeEl.value;
+    if (state.mode === 'edit') state.editResolution = sizeEl.value; else state.resolution = sizeEl.value;
     renderRail();
   });
 
-  framesEl.addEventListener('input', function () {
-    state.frames = Number(framesEl.value);
+  function setCount(n) {
+    n = Math.min(maxCount(), Math.max(1, n));
+    if (state.mode === 'edit') state.variants = n; else state.frames = n;
     renderRail();
+  }
+
+  framesEl.addEventListener('input', function () {
+    setCount(Number(framesEl.value));
   });
 
   // Shift+arrows step 5 on the slider.
@@ -2109,8 +2460,7 @@
     if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') step = -5;
     if (!step) return;
     e.preventDefault();
-    state.frames = Math.min(10, Math.max(1, state.frames + step));
-    renderRail();
+    setCount(currentCount() + step);
   });
 
   function syncName(value) {
@@ -2141,34 +2491,6 @@
     if (blockingReason() || busy || Date.now() < rateLimitUntil) return;
 
     var settings = currentSettings();
-
-    if (settings.mode === 'combine') {
-      settings.instruction = settings.prompt;   // what the person typed
-      var edited = writtenEl.value.trim();
-
-      if (edited) {
-        // Already read once, and possibly corrected by hand. Use it as-is and
-        // charge nothing for reading — that step has been paid for already.
-        settings.prompt = edited;
-        settings.readCost = 0;
-      } else {
-        // Stage one: have the references read into a prompt. Cheap, but it is a
-        // network call, so the button has to say what is happening.
-        clearError();
-        setBusy(true, 'Reading the photos');
-        var read;
-        try {
-          read = await describeReferences(state.sources, settings.prompt);
-        } finally {
-          setBusy(false);
-        }
-        if (!read) return;
-        settings.prompt = read.prompt;
-        settings.readCost = read.cost || 0;
-        setWrittenPrompt(read.prompt);
-      }
-    }
-
     submitRun(settings);
   });
 
@@ -2323,6 +2645,10 @@
           shape: r.aspect_ratio || 'auto',
           resolution: r.resolution || '1k',
           n: frames.length,
+          // The photos themselves are not kept, only how many there were and
+          // whether they were combined, so the card can still say so.
+          plan: r.reference ? 'reference' : 'each',
+          sourceCount: typeof r.sources === 'number' ? r.sources : 0,
           sources: [],
           frames: frames,
           controllers: [],
@@ -2351,6 +2677,15 @@
   async function boot() {
     var saved = readStore(STORE_KEY) || {};
 
+    if (!window.ImagineRequest) {
+      document.body.innerHTML =
+        '<div class="gate"><div class="gate__card">' +
+        '<div class="gate__title">Part of the studio did not load</div>' +
+        '<p class="gate__sub">request-body.js is missing or failed to load, so nothing can be sent. Reload; if it persists, check the server is serving /public.</p>' +
+        '</div></div>';
+      return;
+    }
+
     try {
       var res = await fetch('/api/config');
       config = await res.json();
@@ -2367,8 +2702,14 @@
     state.quality = saved.quality || 'auto';
     state.shape = saved.shape || '9:16';
     state.resolution = saved.resolution || '1k';
-    state.frames = Math.min(10, Math.max(1, Number(saved.frames) || 1));
-    state.wording = saved.wording === 'rewrite' ? 'rewrite' : 'keep';
+    if (typeof config.maxEditSources === 'number') MAX_EDIT_SOURCES = config.maxEditSources;
+    if (typeof config.maxEditVariants === 'number') MAX_EDIT_VARIANTS = config.maxEditVariants;
+    if (typeof config.maxFrames === 'number') MAX_FRAMES = config.maxFrames;
+
+    state.frames = Math.min(MAX_FRAMES, Math.max(1, Number(saved.frames) || 1));
+    state.variants = Math.min(MAX_EDIT_VARIANTS, Math.max(1, Number(saved.variants) || 1));
+    state.editShape = SHAPES.some(function (s) { return s.value === saved.editShape; }) ? saved.editShape : 'auto';
+    state.editResolution = RESOLUTIONS.indexOf(saved.editResolution) !== -1 ? saved.editResolution : '1k';
     state.name = saved.name || '';
 
     buildModelOptions();

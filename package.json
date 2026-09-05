@@ -5,7 +5,8 @@
   "description": "Internal image generation and editing for the creative team, proxying xAI's Imagine API so the shared key never reaches the browser.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/request.test.js"
   },
   "engines": {
     "node": ">=18"

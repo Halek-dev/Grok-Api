@@ -41,56 +41,13 @@ const MAX_BODY_BYTES = 40 * 1024 * 1024; // base64 source images are large
 const PROMPT_LOG_CHARS = 300;
 
 // ---------------------------------------------------------------------------
-// Prices, in USD.
-//
-// VERIFY THESE against https://docs.x.ai/developers/pricing before trusting the
-// running total — xAI can change them without changing the API, and nothing here
-// reads back a real balance. These numbers are used ONLY for the local estimate
-// and the usage log. They are never sent to xAI.
-//
-//   input   charged once per source image, so it applies to edits only.
-//   tiers   output price per image, by resolution.
-//
-// grok-imagine-image-2.0 is the only model that accepts a quality parameter.
-// Leaving quality on auto bills low for generation and medium for editing, which
-// is what autoQuality records.
+// Prices, limits and the request builders live in lib/imagine.js, where the
+// tests can reach them without starting a server. Nothing about what is sent
+// to xAI is decided in this file.
 // ---------------------------------------------------------------------------
-const PRICES = {
-  'grok-imagine-image-quality': {
-    label: 'Imagine 1.5 Quality',
-    isDefault: true,
-    retiresAt: '2026-11-02T00:00:00Z',
-    input: 0.01,
-    tiers: { default: { '1k': 0.05, '2k': 0.07 } }
-  },
-  'grok-imagine-image-2.0': {
-    label: 'Imagine 2.0',
-    input: 0.01,
-    tiers: {
-      low: { '1k': 0.04, '2k': 0.06 },
-      medium: { '1k': 0.06, '2k': 0.08 }
-    },
-    autoQuality: { generate: 'low', edit: 'medium' }
-  },
-  'grok-imagine-image': {
-    label: 'Imagine 1.0',
-    input: 0.002,
-    tiers: { default: { '1k': 0.02, '2k': 0.02 } }
-  }
-};
-
-// Models that accept `quality`. Sending it to any other model is a 400, so the
-// client reads this array rather than hardcoding the condition.
-const QUALITY_MODELS = Object.keys(PRICES).filter(function (id) {
-  return !PRICES[id].tiers.default;
-});
-
-// The edits endpoint takes no resolution, so its output is priced at the 1k tier.
-const EDIT_RESOLUTION = '1k';
-
-const ASPECT_RATIOS = ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '21:9'];
-const RESOLUTIONS = ['1k', '2k'];
-const QUALITIES = ['low', 'medium', 'auto'];
+const imagine = require('./lib/imagine.js');
+const PRICES = imagine.PRICES;
+const QUALITY_MODELS = imagine.QUALITY_MODELS;
 
 // ---------------------------------------------------------------------------
 // Config — a hand-parsed .env, because a dozen lines is not worth a dependency.
@@ -175,17 +132,11 @@ if (SAVE_IMAGES) {
 // stub while testing. It must speak the same API as api.x.ai.
 const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+$/, '');
 
-// Combine mode reads the reference photos with a chat model that accepts image
-// input, and has it write the generation prompt. The image endpoints take one
-// source image and no reference input at all, so this is the only way to put
-// several references in front of the model at once.
+// The chat model behind /api/describe, which reads photographs and answers in
+// text. Combining pictures no longer goes through it — the edits endpoint takes
+// up to five source images directly — but the endpoint stays, to be repurposed
+// as a preservation-inventory extractor.
 const VISION_MODEL = String(env('VISION_MODEL', 'grok-4.20-non-reasoning'));
-
-// xAI reports chat usage as cost_in_usd_ticks. VERIFY the tick value against
-// https://docs.x.ai/developers/pricing — like the image prices it is used only
-// for the local running total, never sent anywhere. A reading step is roughly
-// 340 tokens, so this is fractions of a cent next to an image.
-const USD_PER_TICK = Number(env('USD_PER_TICK', 1e-10));
 
 // What a photo is being used for. The client offers these as a dropdown on each
 // reference; the text is what the reading model is actually told.
@@ -260,34 +211,6 @@ function parseDetailLines(text, count) {
     else out.push(line);
   }
   return out.filter(Boolean).slice(0, count);
-}
-
-// ---------------------------------------------------------------------------
-// Cost
-// ---------------------------------------------------------------------------
-function tierFor(model, quality, mode) {
-  const p = PRICES[model];
-  if (!p) return null;
-  if (p.tiers.default) return p.tiers.default;
-  const q = !quality || quality === 'auto'
-    ? p.autoQuality[mode === 'edit' ? 'edit' : 'generate']
-    : quality;
-  return p.tiers[q] || null;
-}
-
-function costFor(opts) {
-  const p = PRICES[opts.model];
-  const tier = tierFor(opts.model, opts.quality, opts.mode);
-  // Unknown model or tier: the caller must say the cost is unknown, not guess.
-  if (!p || !tier) return null;
-  const res = opts.mode === 'edit'
-    ? EDIT_RESOLUTION
-    : (RESOLUTIONS.indexOf(opts.resolution) === -1 ? '1k' : opts.resolution);
-  const per = tier[res];
-  if (typeof per !== 'number') return null;
-  const n = Math.max(1, Math.floor(opts.count || 1));
-  const input = opts.mode === 'edit' ? p.input : 0;
-  return Math.round((per * n + input) * 1e6) / 1e6;
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +524,8 @@ async function readRuns(limit) {
         quality: r.quality,
         resolution: r.resolution,
         aspect_ratio: r.aspect_ratio,
+        sources: typeof r.sources === 'number' ? r.sources : null,
+        reference: Boolean(r.reference),
         prompt: r.prompt,
         cost: 0,
         images: []
@@ -747,12 +672,11 @@ async function callXai(endpoint, payload) {
 // ---------------------------------------------------------------------------
 // POST /api/describe
 //
-// Reads the reference photos and returns a generation prompt. This exists
-// because the image endpoints cannot take more than one source image: `image`
-// deserialises as a single two-field struct, so an array is not a list of
-// pictures, and /images/generations ignores the field entirely. A chat model
-// that accepts image input is the only place several references can be seen at
-// once, so it looks at them and writes the prompt instead.
+// Reads photographs with a chat model and returns a generation prompt. It was
+// built when the studio believed the edits endpoint could take only one source
+// image; that turned out to be wrong (the plural `images` field takes five), so
+// the Combine mode that called this is gone. The endpoint is kept, unchanged in
+// behaviour, to be repurposed as a preservation-inventory extractor.
 // ---------------------------------------------------------------------------
 async function handleDescribe(req, res, body) {
   if (!XAI_API_KEY) {
@@ -859,9 +783,7 @@ async function handleDescribe(req, res, body) {
   const details = style === 'keep' ? parseDetailLines(raw, images.length) : [];
   const prompt = style === 'keep' ? composePrompt(instruction, details) : raw;
 
-  const ticks = json.usage && typeof json.usage.cost_in_usd_ticks === 'number'
-    ? json.usage.cost_in_usd_ticks : 0;
-  const cost = Math.round(ticks * USD_PER_TICK * 1e6) / 1e6;
+  const cost = imagine.usdFromTicks(json.usage && json.usage.cost_in_usd_ticks) || 0;
 
   sendJson(res, 200, {
     prompt: prompt,
@@ -888,84 +810,24 @@ async function handleImages(req, res, body) {
     return fail(res, 400, 'The request body was not valid JSON.', { code: 'bad_request' });
   }
 
-  // 'combine' is several photos composited into one picture by the client and
-  // sent as a single source. It uses the edits endpoint and is priced like an
-  // edit, but is logged under its own name so usage.jsonl stays truthful.
-  const MODES = ['generate', 'edit', 'combine'];
-  const mode = MODES.indexOf(input.mode) === -1 ? 'generate' : input.mode;
-  // Combine used to composite photos into one source image and go through the
-  // edits endpoint. It no longer does: the references are read by a vision model
-  // which writes the prompt, and this is a plain generation from that prompt.
-  const usesEditEndpoint = mode === 'edit';
-  const model = String(input.model || '');
-  const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+  // Which endpoint, the singular `image` or the plural `images`, which settings
+  // are optional, the consent and likeness checks — all decided in
+  // lib/imagine.js, where the tests can see it.
+  const built = imagine.buildImageRequest(input);
+  if (built.error) {
+    return fail(res, built.code === 'likeness_policy' ? 422 : 400, built.error, { code: built.code });
+  }
+
+  const mode = built.mode;
+  const model = built.model;
+  const prompt = built.prompt;
   const user = typeof input.user === 'string' ? input.user.trim().slice(0, 80) : '';
   // A run is one press of the button. The client asks for one image per request
   // so frames arrive as they finish, which means several log lines share a run —
   // this is what groups them back together when reading usage.jsonl.
   const runId = typeof input.runId === 'string' ? input.runId.trim().slice(0, 40) : null;
 
-  if (!PRICES[model]) {
-    return fail(res, 400,
-      'Unknown model "' + model + '". Pick one of: ' + Object.keys(PRICES).join(', ') + '.',
-      { code: 'bad_request' });
-  }
-  if (!prompt) {
-    return fail(res, 400, usesEditEndpoint
-      ? 'Describe the change you want before applying an edit.'
-      : 'Write a prompt before generating.', { code: 'bad_request' });
-  }
-
-  const acceptsQuality = QUALITY_MODELS.indexOf(model) !== -1;
-  const quality = QUALITIES.indexOf(input.quality) === -1 ? 'auto' : input.quality;
-
-  const endpoint = usesEditEndpoint ? '/images/edits' : '/images/generations';
-  let payload;
-  let minimalPayload;
-
-  if (usesEditEndpoint) {
-    const image = input.image;
-    if (!image || typeof image !== 'string' || !image.trim()) {
-      return fail(res, 400, 'Add a photo to edit — the edit endpoint needs one source image.', { code: 'bad_request' });
-    }
-    // One source image in, one image out. Never send n here.
-    const imageField = { url: image, type: 'image_url' };
-    payload = {
-      model: model,
-      prompt: prompt,
-      image: imageField,
-      response_format: 'b64_json'
-    };
-    minimalPayload = {
-      model: model,
-      prompt: prompt,
-      image: imageField,
-      response_format: 'b64_json'
-    };
-    if (acceptsQuality && quality !== 'auto') payload.quality = quality;
-  } else {
-    const count = Math.min(10, Math.max(1, Math.floor(Number(input.n) || 1)));
-    const aspect = ASPECT_RATIOS.indexOf(input.aspect_ratio) === -1 ? 'auto' : input.aspect_ratio;
-    const resolution = RESOLUTIONS.indexOf(input.resolution) === -1 ? '1k' : input.resolution;
-    payload = {
-      model: model,
-      prompt: prompt,
-      n: count,
-      aspect_ratio: aspect,
-      resolution: resolution,
-      response_format: 'b64_json'
-    };
-    minimalPayload = {
-      model: model,
-      prompt: prompt,
-      n: count,
-      response_format: 'b64_json'
-    };
-    // Sending quality to a model that does not accept it is a 400.
-    if (acceptsQuality && quality !== 'auto') payload.quality = quality;
-  }
-
-  let result = await callXai(endpoint, payload);
+  let result = await callXai(built.endpoint, built.payload);
   let degraded = false;
 
   // A 400 usually means one optional parameter was not accepted. Retry once with
@@ -973,7 +835,7 @@ async function handleImages(req, res, body) {
   // should not cost the user the whole run.
   // A rejected key produces a 400 too, and retrying that just doubles the wait.
   if (!result.ok && !result.networkFailure && result.status === 400 && result.code !== 'key_rejected') {
-    const retry = await callXai(endpoint, minimalPayload);
+    const retry = await callXai(built.endpoint, built.minimalPayload);
     if (retry.ok) {
       result = retry;
       degraded = true;
@@ -1006,7 +868,10 @@ async function handleImages(req, res, body) {
     return {
       b64: typeof item.b64_json === 'string' ? item.b64_json : null,
       url: typeof item.url === 'string' ? item.url : null,
-      revised_prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : null,
+      // The edits endpoint sends revised_prompt back empty, so it is never read
+      // on that path — the instruction the person typed is the truthful caption.
+      revised_prompt: mode !== 'edit' && typeof item.revised_prompt === 'string' && item.revised_prompt
+        ? item.revised_prompt : null,
       id: null
     };
   }).filter(function (img) {
@@ -1017,20 +882,25 @@ async function handleImages(req, res, body) {
     return fail(res, 502, 'xAI returned image records with neither b64_json nor url in them.', { code: 'upstream' });
   }
 
-  // The minimal retry sends no aspect_ratio, resolution or quality, so those
-  // revert to the API defaults. Price and log what was actually billed, not what
-  // was asked for, or a degraded 2k run is charged at the 2k rate it never got.
-  const effectiveQuality = degraded ? 'auto' : quality;
-  const effectiveResolution = degraded ? '1k' : payload.resolution;
-  const effectiveAspect = degraded ? 'auto' : payload.aspect_ratio;
+  // The minimal retry sends no aspect_ratio, resolution, n or quality, so those
+  // revert to the API defaults. Log what actually applied, not what was asked
+  // for, or a degraded 2k run is recorded at a size it never got.
+  const effectiveQuality = degraded ? 'auto' : built.quality;
+  const effectiveResolution = degraded ? '1k' : built.payload.resolution;
+  const effectiveAspect = degraded ? 'auto' : built.payload.aspect_ratio;
 
-  const cost = costFor({
+  // What it cost. xAI's own figure whenever the response carries one; the price
+  // table only when it does not, and then flagged as an estimate so the running
+  // total never presents a guess as a bill.
+  const billed = imagine.costFromResponse(result.json, {
     model: model,
     quality: effectiveQuality,
     resolution: effectiveResolution,
     mode: mode,
-    count: images.length
+    count: images.length,
+    sources: built.sources
   });
+  const cost = billed.cost;
 
   // Save the bytes before answering, so a refresh can bring the run back. A
   // failure to write is logged but never fails the request — the user has
@@ -1052,11 +922,14 @@ async function handleImages(req, res, body) {
     user: user || null,
     mode: mode,
     model: model,
-    quality: acceptsQuality ? effectiveQuality : null,
-    resolution: usesEditEndpoint ? null : effectiveResolution,
-    aspect_ratio: usesEditEndpoint ? null : effectiveAspect,
+    quality: built.acceptsQuality ? effectiveQuality : null,
+    resolution: effectiveResolution,
+    aspect_ratio: effectiveAspect,
+    sources: built.sources,
+    reference: built.reference,
     images: images.length,
     cost: cost,
+    costEstimated: billed.estimated,
     degraded: degraded,
     prompt: prompt.slice(0, PROMPT_LOG_CHARS)
   });
@@ -1066,6 +939,7 @@ async function handleImages(req, res, body) {
       return { b64: i.b64, url: i.url, revised_prompt: i.revised_prompt, id: i.id || null };
     }),
     cost: cost,
+    costEstimated: billed.estimated,
     degraded: degraded
   });
 }
@@ -1140,6 +1014,9 @@ const server = http.createServer(async function (req, res) {
         requiresPassword: Boolean(TEAM_PASSWORD),
         prices: PRICES,
         qualityModels: QUALITY_MODELS,
+        maxEditSources: imagine.MAX_EDIT_SOURCES,
+        maxEditVariants: imagine.MAX_EDIT_VARIANTS,
+        maxFrames: imagine.MAX_GENERATE_FRAMES,
         savesImages: SAVE_IMAGES && STORAGE_READY
       });
     }

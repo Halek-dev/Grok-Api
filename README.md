@@ -234,116 +234,81 @@ originally did, with results living in the browser tab only.
 
 ### Editing several photos at once
 
-Drop up to ten photos into edit mode and the same instruction is applied to each,
-one image back per photo — ten photos, ten separate requests, ten results. The
-cost line shows the total before you commit, and each photo carries its own input
-charge.
+Drop two or more photos into edit mode and the rail asks which of two different
+things you want, because it cannot guess:
 
-**The endpoint takes one source image per request, and that is a real limit.**
-It will accept an array without complaint, but testing showed only the first
-image is used: sending a green photo and a magenta one with the instruction
-"return the SECOND photo" returned the green one. So edit mode edits photos *in
-a batch*; it does not merge them. For that, use Combine.
+- **Combine into one** *(the default)* — one image out. The first photo is the
+  base and everything in it is kept; the others contribute only what the prompt
+  asks for. This is the reference edit described below.
+- **Edit each** — the same instruction applied to every photo, one image back
+  per photo. Ten photos, ten separate requests, ten results, each carrying its
+  own input charge.
 
-### Combine — one image from several references
+### Combining photos into one
 
-Drop reference photos, say what you want made from them, and Combine produces a
-single new image. It runs in two stages:
+xAI's edit endpoint takes **up to five source images in one request**, through
+the plural `images` field, and it transfers identity from them. This was
+measured, not assumed: in a seven-run experiment the base photo kept its pose,
+clothing, backdrop and framing while the face, hair and eye colour came from
+the second photo, recognisably the same person. The singular `image` field —
+the only one the studio used to send — transfers nothing, which is why the
+earlier "Combine" mode existed and why it has now been retired.
 
-1. **The photos are read.** They go to a chat model that accepts image input
-   (`VISION_MODEL`, default `grok-4.20-non-reasoning`), which sees all of them at
-   once and writes one detailed generation prompt.
-2. **That prompt is generated normally.** Same models, shapes, sizes, quality and
-   frame counts as any other run — Combine is a generation, not an edit.
+**Order is the result.** The first photo is the base, marked with a *Base*
+badge. Reversing the order reversed the transfer in testing. Drag a row, or use
+its arrows, to change which photo is the base.
 
-The written prompt appears under your instruction on the run card, so a poor
-result can be traced to a poor prompt and reworded rather than guessed at.
+**Crop the references, not the base.** Each non-base photo has a *Crop*
+button. Draw a box around what should carry over — head and shoulders for a
+face, nothing else. The crop is cut from the untouched original and upscaled so
+its short side is at least 1536 px with smoothing off (nearest neighbour), the
+treatment that gave the closest likeness in testing. It costs nothing extra.
 
-#### Telling it exactly what you want
+**Imagine 2.0 at 2k, by default.** The moment a second photo lands, the model
+switches to Imagine 2.0 and the size to 2k. Resolution made the widest
+difference in the experiment — 1k was the weakest transfer of the four — so the
+rail warns if you drop back to 1k. A choice you make after that stands.
 
-Three things make the reading step precise rather than a guess.
+**Variants.** The count slider becomes *Variants* on an edit, one to four, so
+one run gives several draws to choose from. Each variant is its own request and
+re-sends every source photo, which is why the cap is lower than generation's
+ten and why the estimate grows with the number of photos.
 
-**Photos are numbered, and the model is told the numbers.** Each one is
-announced — *"Photo 1 — use this for the subject."* — before it is shown. Without
-that, "photo 1" in your instruction is something the model has to infer from
-message order, and an instruction naming a photo can land on the wrong one.
+**Shape and size are sent on edits now.** Left on *Same as the base photo*, the
+output follows the first photo; pick a shape and it is honoured instead.
 
-**Each photo has a role.** A dropdown on every reference says what to take from
-it: Subject, Setting, Style, Pose, Clothing, Lighting, or *Any part of it*. This
-is what removes the ambiguity in something like "swap A with B". Tested with two
-portraits — a dark-haired woman and a blonde one:
+#### Permission and the likeness rule
 
-| Roles | Result |
-|---|---|
-| photo 1 = Subject, photo 2 = Clothing | dark hair, white collared shirt |
-| photo 1 = Clothing, photo 2 = Subject | blonde curls, black long-sleeved top |
+Combining photos puts a real person's face into a new picture. Two things are
+required, in code, not left to whoever is at the keyboard:
 
-Swapping the roles swapped the output, which is the point.
+1. **Confirmation, once a session.** Before the first combined edit, a notice
+   asks you to confirm you have permission from everyone shown. The server
+   refuses a combined edit that does not carry that confirmation
+   (`consent_required`).
+2. **No sexualised material.** A combined edit whose instruction sexualises the
+   result is refused outright (`likeness_policy`), and nothing is charged.
 
-**Your wording is kept.** This is the default and it matters: what you type is
-used *exactly as typed*, and the photos only add detail after it.
+The second rule reads the instruction, not the photographs. Judging what is in
+a source image would need a vision pass on every run; that is not done, so xAI's
+own moderation remains the backstop for the pictures themselves.
 
-```
-A moody low-key portrait, hard rim light from behind, deep shadows,
-shot on 85mm, film grain.                          ← your words, verbatim
-Woman with long straight dark brown hair, fair
-skin, dark eyes, wearing black top.                ← from photo 1 (Subject)
-White collared button-up shirt, crisp cotton
-fabric, structured collar.                         ← from photo 2 (Clothing)
-```
+#### Cost comes from the API
 
-The reading model is told your prompt already exists and that anything it
-describes outside a photo's stated role will fight your wording — so with a
-Subject role it describes the person and *not* the lighting, framing or
-background, which are yours to set. Without that rule it kept appending "soft
-even studio lighting" to prompts that asked for hard rim light.
+Every image response carries `usage.cost_in_usd_ticks`, at 10⁻¹⁰ USD a tick
+(a $0.02 generation reports 200000000). The running total, the run card and
+`usage.jsonl` all use that figure. The price table is now only the estimate
+shown before a run, and a fallback if a response ever arrives without a usage
+block — in which case the run is marked `costEstimated` and the card shows
+the amount with a tilde.
 
-**Let it rewrite** is the other option, one tap away. The model authors the whole
-prompt from your photos. It reads better and is more evocative, but your wording
-is replaced — which is why it is not the default.
+#### What became of Combine mode
 
-**The prompt is editable either way.** If it is nearly right, fix it in the rail
-and run again — it uses your version and does **not** pay to read the photos a
-second time. "Read the photos again" clears it. Changing the photos, or switching
-between Keep and Rewrite, clears it too, since the old text no longer matches.
-
-One thing the reading model is told explicitly: the image model cannot see the
-photos and cannot follow instructions, so the prompt must describe the finished
-picture rather than say "swap" or "replace". That alone fixes a lot of the
-confusing results.
-
-Reading costs about **$0.003** — a fraction of a cent beside an image — and
-happens once per run however many frames you ask for. "Again" re-uses the prompt
-already written rather than paying to read the photos twice.
-
-#### Why it works this way
-
-The image endpoints cannot take more than one reference. This was measured, not
-assumed:
-
-- **`/images/edits` takes exactly one source image.** Passing an array does not
-  give it several: `image` deserialises as a single two-field struct, so
-  `[a, b]` means `{url: a, type: b}`. The error for a one-element array says it
-  outright — *"invalid length 1, expected struct ImageUrl with 2 elements"*.
-- **`/images/generations` ignores an `image` field entirely.** It accepts one
-  without complaint and generates from the prompt alone.
-
-An earlier version composited the photos into one picture and sent that through
-the edits endpoint. It produced poor results for a reason obvious in hindsight:
-an edit endpoint edits the picture it is given, so a side-by-side went in and an
-edited side-by-side came out. Reading the references and generating fresh is what
-actually works.
-
-#### What it will not do
-
-**It does not copy likeness.** There is no reference-image input on the
-generation endpoint, so the output is a new image *described from* your
-references, not a composite of them. A specific person's face will not survive
-the round trip. For identity-preserving face swaps you need a tool built for
-that — this API cannot do it, and no wording of the prompt changes that.
-
-What it is good at is compositional: a subject in a different setting, an object
-in a new scene, one photo's styling applied to another's content.
+The old mode sent the reference photos to a chat model (`/api/describe`),
+had it write a prompt, and generated from that. It was built to work around a
+limitation the edit endpoint does not have. The tab is gone and the client code
+with it. The endpoint stays, unchanged, to be repurposed as a
+preservation-inventory extractor.
 
 ### Imagine 1.5 Quality retires on 2 November 2026
 
@@ -374,8 +339,11 @@ everyone, one JSON object per line:
 {"timestamp":"2026-09-04T16:55:26.213Z","runId":"run-3-mtniakty","user":"Nadia R.","mode":"generate","model":"grok-imagine-image","quality":null,"resolution":"1k","aspect_ratio":"4:3","images":1,"cost":0.02,"degraded":false,"prompt":"a ceramic vase on a plaster shelf"}
 ```
 
-The `mode` field is `generate`, `edit` or `combine`, so the log says what was
-actually done rather than lumping the two photo modes together.
+The `mode` field is `generate` or `edit`. An edit line also records `sources`
+(how many photos went in) and `reference` (whether they were combined into one
+image or edited apart), and every line carries `costEstimated` — `false` when
+the amount is what xAI reported, `true` on the rare response with no usage
+block.
 
 **One line per image, not per run.** Because each frame is its own request, a
 six-frame run writes six lines. They all carry the same `runId`, which is what
@@ -444,8 +412,7 @@ tail -n 10 usage.jsonl
 | `DATA_DIR` | project folder | Where saved images and `usage.jsonl` live. Point at a mounted volume on any host with an ephemeral disk. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
-| `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model that reads reference photos in Combine mode. Must accept image input. |
-| `USD_PER_TICK` | `1e-10` | Converts xAI chat usage ticks to dollars for the running total. Verify against the pricing page. |
+| `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model behind `/api/describe`, which reads photographs and answers in text. Must accept image input. |
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Only for a gateway, or a stub while testing. |
 
 Real environment variables win over `.env`.
@@ -486,9 +453,17 @@ The account balance is empty. Top it up in the xAI console. Images already on th
 page still download.
 
 **"Add a photo to edit"**
-Edit mode needs at least one photo. Drop up to ten and the same instruction is
-applied to each. If you were hoping to combine two photos into one, that is not
-something the API supports — see *Editing several photos at once* above.
+Edit mode needs at least one photo. Drop two or more and the rail asks whether to
+combine them into one image or edit each — see *Editing several photos at once*
+above.
+
+**"Confirm permission first"**
+A combined edit was sent without the once-a-session confirmation. Tick the box
+under the photos and run it again. Nothing was charged.
+
+**"This studio will not make that"**
+The instruction for a combined edit was sexualised. That is refused in code, for
+every person, every session. Nothing was charged.
 
 **"Some frames did not arrive"**
 Part of a run failed while the rest succeeded. The images that came back are kept
@@ -539,11 +514,19 @@ not `node ../server.js`.
 ## Layout
 
 ```
-server.js          the proxy, key handling, price table, usage log
+server.js              the proxy, key handling, usage log, saved images
+lib/imagine.js         price table, limits, the request builder and cost reading
 public/index.html
 public/styles.css
-public/app.js      vanilla JS, no framework
+public/app.js          vanilla JS, no framework
+public/request-body.js the body the page sends per frame; shared with the tests
+test/request.test.js   node --test; run with npm test
 .env.example
-.gitignore         excludes .env and usage.jsonl
-usage.jsonl        created on the first successful run
+.gitignore             excludes .env and usage.jsonl
+usage.jsonl            created on the first successful run
 ```
+
+`npm test` runs the request-builder tests: one source uses `image`, two to five
+use `images`, never both; order is preserved; `n`, `aspect_ratio` and
+`resolution` are sent on edits; consent and the likeness rule are enforced;
+cost is read from ticks. No dependencies — Node's built-in runner.
