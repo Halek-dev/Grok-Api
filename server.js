@@ -97,10 +97,12 @@ const PORT = Number(env('PORT', 8787));
 const HOST = String(env('HOST', '0.0.0.0'));
 const UPSTREAM_TIMEOUT_MS = Number(env('UPSTREAM_TIMEOUT_MS', 180000));
 
-// Where generated images and the spend log are kept. On a host with an ephemeral
-// filesystem — Railway, Fly, most container platforms — point DATA_DIR at a
-// mounted volume, or every redeploy silently throws both away.
-DATA_DIR = path.resolve(String(env('DATA_DIR', ROOT)));
+// Where generated images and the spend log are kept. On a host whose disk is
+// replaced on every deploy — Railway, Fly, most container platforms — only a
+// mounted volume survives, so an attached Railway volume is used automatically
+// and a deployment without one is called out at boot. See lib/storage.js.
+const STORAGE = require('./lib/storage.js').resolveStorage(function (name) { return env(name, ''); }, ROOT);
+DATA_DIR = STORAGE.dir;
 USAGE_LOG = path.join(DATA_DIR, 'usage.jsonl');
 IMAGE_DIR = path.join(DATA_DIR, 'images');
 
@@ -1063,7 +1065,9 @@ const server = http.createServer(async function (req, res) {
         maxEditSources: imagine.MAX_EDIT_SOURCES,
         maxEditVariants: imagine.MAX_EDIT_VARIANTS,
         maxFrames: imagine.MAX_GENERATE_FRAMES,
-        savesImages: SAVE_IMAGES && STORAGE_READY
+        savesImages: SAVE_IMAGES && STORAGE_READY,
+        // True when the history will not survive the next deploy.
+        storageEphemeral: Boolean(STORAGE.ephemeral && SAVE_IMAGES)
       });
     }
 
@@ -1285,4 +1289,13 @@ server.listen(PORT, HOST, function () {
   console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'
     : STORAGE_READY ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')'
     : 'NOT WRITABLE — ' + IMAGE_DIR + '  (' + STORAGE_PROBLEM + ')'));
+  console.log('  Data folder       ' + DATA_DIR + '  (from ' + STORAGE.source + ')');
+  if (STORAGE.ephemeral && SAVE_IMAGES) {
+    console.error('');
+    console.error('[storage] WARNING: saved images and the usage log will be LOST on the next deploy.');
+    console.error('[storage] Reason: ' + STORAGE.why + '.');
+    console.error('[storage] Fix: in Railway, right-click the service, Attach Volume, mount path /data.');
+    console.error('[storage] Leave DATA_DIR unset (or set it to a folder inside the volume). See README.');
+    console.error('');
+  }
 });

@@ -249,9 +249,31 @@ is roughly 2.5 GB; most 1k output is 200–400 KB, so realistically far less.
 To turn the whole thing off, set `SAVE_IMAGES=false`; the app then behaves as it
 originally did, with results living in the browser tab only.
 
-> **On Railway, Fly, or any container host, the filesystem is wiped on every
-> redeploy.** Mount a volume and set `DATA_DIR` to it, or the images and the
-> spend log disappear each time you deploy.
+#### Keeping the history across deploys (Railway)
+
+On Railway, Fly, or any container host, the service's own disk is replaced on
+every deploy. Without a volume, every push to GitHub empties the results column,
+the favourites and the spend log. The saving code is not at fault: the files
+were written, and then the disk they were on was thrown away.
+
+The fix is a volume, done once in the Railway dashboard:
+
+1. Open the project, right-click the service, choose **Attach Volume**.
+2. Mount path: `/data`. Create it. Railway redeploys the service.
+3. Leave `DATA_DIR` unset. The server uses an attached Railway volume on its
+   own. If `DATA_DIR` is already set, either delete it or make it a folder
+   inside the volume, such as `/data`.
+
+Check the deploy log after it restarts. It should say
+`Data folder       /data  (from Railway volume)`. If it instead prints
+`[storage] WARNING: saved images and the usage log will be LOST on the next
+deploy`, the line under it says why: no volume attached, or `DATA_DIR` pointing
+somewhere outside it.
+
+Anything generated *before* the volume existed is on the old disk and goes with
+it. Download what matters before attaching the volume; nothing after that point
+is lost to a deploy. A volume has a size limit set by your Railway plan, and
+`MAX_STORED_IMAGES` is what keeps the app under it.
 
 ### Editing several photos at once
 
@@ -504,7 +526,7 @@ the shape, size or quality they chose; the line says what xAI objected to.
 | `PORT` | `8787` | |
 | `HOST` | `0.0.0.0` | All interfaces. Use `127.0.0.1` to restrict to this machine. |
 | `UPSTREAM_TIMEOUT_MS` | `180000` | How long to wait for xAI before giving up. |
-| `DATA_DIR` | project folder | Where saved images and `usage.jsonl` live. Point at a mounted volume on any host with an ephemeral disk. |
+| `DATA_DIR` | an attached Railway volume if there is one, else the project folder | Where saved images, favourites and `usage.jsonl` live. Must be on a mounted volume on any host that replaces its disk on deploy. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
 | `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model behind `/api/describe`, which reads photographs and answers in text. Must accept image input. |

@@ -2628,6 +2628,13 @@
     renderRail();
     promptEl.focus();
     loadSavedRuns();
+    // The server knows when its disk is replaced on every deploy. Say so here,
+    // where the people whose work it is will see it, not only in a deploy log.
+    if (config.storageEphemeral) {
+      showError('Results here will not survive the next update',
+        'The server has no permanent storage attached, so saved images and favourites are wiped each time the app is redeployed. Download anything you need to keep, and ask whoever runs the server to attach a volume — the README says how.',
+        'warning');
+    }
   }
 
   // Runs saved by the server, rebuilt into the same shape a live run has so the
