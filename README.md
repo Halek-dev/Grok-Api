@@ -449,6 +449,30 @@ tail -n 10 usage.jsonl
 
 ---
 
+### Reading failures in the deploy log
+
+Every request xAI refuses, and every one that times out or cannot connect,
+writes one line to stderr. On Railway that is the service's deploy log; search
+it for `xai-fail`.
+
+```
+[xai-fail] 2026-09-18T05:59:20.534Z status=404 code=model_unavailable mode=edit model=grok-imagine-image-quality photos=2 size=2k shape=auto n=1 user="Nadia R." x-request-id=… msg="The model grok-imagine-image-quality does not exist or your team …"
+```
+
+The line says when, who (the *Working as* name), generate or edit, which model,
+how many photos, the size and shape asked for, the status, this app's name for
+the failure, any request-id or region header xAI sent, and xAI's own message.
+It never contains the prompt, image data, the password or anyone's address.
+
+**Temporary or real?** Successes are in `usage.jsonl`, failures are here. A
+short cluster of `xai-fail` lines for one model, with successes on that model
+before and after, is a blip at xAI. Lines that keep coming and never stop are a
+real fault. The `x-request-id` is what xAI support will ask for.
+
+A line starting `[xai-retry]` means a request was refused once, then succeeded
+when retried without the optional settings. The person got an image, but not at
+the shape, size or quality they chose; the line says what xAI objected to.
+
 ## Things that are deliberate
 
 - **Runs survive a refresh.** Every generated image is written to disk on the

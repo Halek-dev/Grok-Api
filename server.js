@@ -49,6 +49,15 @@ const imagine = require('./lib/imagine.js');
 const PRICES = imagine.PRICES;
 const QUALITY_MODELS = imagine.QUALITY_MODELS;
 const { createThrottle } = require('./lib/throttle.js');
+const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.js');
+
+// A refused or failed upstream request, written to stderr — on Railway, the
+// deploy log. The usage log records only successes and xAI's console does not
+// record a request it turns away, so without this a failure leaves no trace.
+// Never the prompt, never image data: see lib/failures.js.
+function logFailure(info) {
+  console.error(failureLogLine(info));
+}
 
 // ---------------------------------------------------------------------------
 // Config — a hand-parsed .env, because a dozen lines is not worth a dependency.
@@ -605,19 +614,6 @@ function extractError(bodyText, status) {
   return msg;
 }
 
-function classify(status, message) {
-  const m = String(message || '').toLowerCase();
-  if (status === 429) return 'rate_limited';
-  if (status === 402) return 'no_credits';
-  if (/credit|balance|quota|insufficient fund|billing/.test(m)) return 'no_credits';
-  if (status === 401 || status === 403) return 'key_rejected';
-  // xAI answers a bad key with 400, not 401, so the status alone is misleading.
-  // Without this the user is told to rewrite their prompt over a server problem.
-  if (/api key|apikey|authentication|unauthori[sz]ed/.test(m)) return 'key_rejected';
-  if (/moderat|safety|blocked|content policy|violat/.test(m)) return 'moderation';
-  return 'upstream';
-}
-
 function retryAfterSeconds(headers) {
   const raw = headers.get('retry-after');
   if (!raw) return null;
@@ -668,7 +664,8 @@ async function callXai(endpoint, payload) {
       status: response.status,
       code: classify(response.status, message),
       message: message,
-      retryAfter: retryAfterSeconds(response.headers)
+      retryAfter: retryAfterSeconds(response.headers),
+      trace: pickTraceHeaders(response.headers)
     };
   }
 
@@ -762,6 +759,8 @@ async function handleDescribe(req, res, body) {
     });
   } catch (err) {
     const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    logFailure({ mode: 'describe', model: VISION_MODEL, sources: images.length, status: null,
+      code: timedOut ? 'timeout' : 'network', message: err && err.message });
     return fail(res, 504, timedOut
       ? 'Reading the photos took too long and was given up on.'
       : 'Could not reach api.x.ai to read the photos (' + (err && err.message ? err.message : 'network error') + ').',
@@ -771,6 +770,8 @@ async function handleDescribe(req, res, body) {
   const text = await response.text();
   if (!response.ok) {
     const message = extractError(text, response.status);
+    logFailure({ mode: 'describe', model: VISION_MODEL, sources: images.length, status: response.status,
+      code: classify(response.status, message), message: message, trace: pickTraceHeaders(response.headers) });
     return fail(res, response.status >= 500 ? 502 : response.status, message, {
       code: classify(response.status, message),
       upstreamStatus: response.status,
@@ -855,6 +856,12 @@ async function handleImages(req, res, body) {
   // this is what groups them back together when reading usage.jsonl.
   const runId = typeof input.runId === 'string' ? input.runId.trim().slice(0, 40) : null;
 
+  // What every log line about this request says about it.
+  const about = {
+    user: user, mode: mode, model: model, sources: mode === 'edit' ? built.sources : null,
+    resolution: built.payload.resolution, aspect: built.payload.aspect_ratio, n: built.payload.n
+  };
+
   let result = await callXai(built.endpoint, built.payload);
   let degraded = false;
 
@@ -863,17 +870,26 @@ async function handleImages(req, res, body) {
   // should not cost the user the whole run.
   // A rejected key produces a 400 too, and retrying that just doubles the wait.
   if (!result.ok && !result.networkFailure && result.status === 400 && result.code !== 'key_rejected') {
+    const first = result;
     const retry = await callXai(built.endpoint, built.minimalPayload);
     if (retry.ok) {
       result = retry;
       degraded = true;
+      // The person got their image, but not with the settings they chose. Say
+      // what xAI objected to, or a setting that is always refused goes unnoticed.
+      logFailure(Object.assign({}, about, { kind: 'xai-retry', status: first.status, code: first.code,
+        message: 'rescued by retrying without optional settings; first answer: ' + first.message, trace: first.trace }));
     }
   }
 
   if (!result.ok) {
     const status = result.networkFailure ? 504 : (result.status >= 500 ? 502 : result.status);
+    logFailure(Object.assign({}, about, { status: result.networkFailure ? null : result.status,
+      code: result.code, message: result.message, trace: result.trace }));
     return fail(res, status, result.message, {
       code: result.code,
+      // So the page can name the model that is not answering and offer another.
+      model: model,
       upstreamStatus: result.networkFailure ? null : result.status,
       retryAfter: result.retryAfter || null,
       seconds: result.seconds || null
@@ -885,6 +901,7 @@ async function handleImages(req, res, body) {
   // A success with no data means moderation filtered the prompt. Say so — do not
   // return an empty success and let the page look broken.
   if (data.length === 0) {
+    logFailure(Object.assign({}, about, { status: 200, code: 'moderation', message: 'success with no images in it' }));
     return fail(res, 422,
       'xAI accepted the request but returned no images, which means moderation filtered this prompt.',
       { code: 'moderation' });
@@ -907,6 +924,7 @@ async function handleImages(req, res, body) {
   });
 
   if (images.length === 0) {
+    logFailure(Object.assign({}, about, { status: 200, code: 'upstream', message: 'image records with neither b64_json nor url' }));
     return fail(res, 502, 'xAI returned image records with neither b64_json nor url in them.', { code: 'upstream' });
   }
 
@@ -1263,6 +1281,7 @@ server.listen(PORT, HOST, function () {
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Usage log         ' + USAGE_LOG);
+  console.log('  Failures          one [xai-fail] line each, here on stderr');
   console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'
     : STORAGE_READY ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')'
     : 'NOT WRITABLE — ' + IMAGE_DIR + '  (' + STORAGE_PROBLEM + ')'));
