@@ -118,12 +118,18 @@ document, no post, no screenshot with the address in it.
 
 | Model | Shown as | 1k | 2k | Per source image on edits |
 |---|---|---|---|---|
-| `grok-imagine-image-quality` | Imagine 1.5 Quality *(default)* | $0.05 | $0.07 | $0.01 |
-| `grok-imagine-image-2.0` — low | Imagine 2.0 | $0.04 | $0.06 | $0.01 |
+| `grok-imagine-image-quality` | Imagine 1.5 Quality | $0.05 | $0.07 | $0.01 |
+| `grok-imagine-image-2.0` — low | Imagine 2.0 *(default)* | $0.04 | $0.06 | $0.01 |
 | `grok-imagine-image-2.0` — medium | Imagine 2.0 | $0.06 | $0.08 | $0.01 |
 | `grok-imagine-image` | Imagine 1.0 | $0.02 | $0.02 | $0.002 |
 
 All figures USD, per image.
+
+**Imagine 2.0 is the default.** It is the model xAI is keeping: 1.5 Quality
+retires on 2 November 2026 and is served by 2.0 from then on. Anyone who has
+already picked a model keeps their choice; only people who never chose one start
+on 2.0. With quality left on Auto, 2.0 bills the low tier for generation and the
+medium tier for edits.
 
 **Verify these against <https://docs.x.ai/developers/pricing>.** They live in one
 constant at the top of `server.js` and are used *only* for the local estimate
