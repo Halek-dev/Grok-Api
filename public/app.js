@@ -1167,6 +1167,21 @@
       return ['danger', 'This studio will not make that',
         message + ' Nothing was charged.'];
     }
+    if (code === 'model_unavailable') {
+      // xAI's own wording ("does not exist or your team does not have access")
+      // reads like a permissions or billing problem. It has been neither: the
+      // model stopped being served for a few minutes and came back.
+      var prices = (config && config.prices) || {};
+      var failed = payload && payload.model;
+      var failedLabel = prices[failed] ? prices[failed].label : 'That model';
+      var others = Object.keys(prices).filter(function (id) { return id !== failed && !modelIsRetired(id); });
+      var pick = others.filter(function (id) { return prices[id].isDefault; })[0] || others[0];
+      return ['warning', failedLabel + ' is not answering right now',
+        'xAI turned the request away before making anything, so nothing was charged. This is usually temporary. ' +
+        (pick ? 'Switch to ' + prices[pick].label + ' in the Model list, or try again in a few minutes. '
+              : 'Try again in a few minutes. ') +
+        'Your credits and the team key are fine.'];
+    }
     if (code === 'too_large') {
       return ['danger', 'That photo is too large',
         message];

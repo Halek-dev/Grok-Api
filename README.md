@@ -560,6 +560,17 @@ under the photos and run it again. Nothing was charged.
 The instruction for a combined edit was sexualised. That is refused in code, for
 every person, every session. Nothing was charged.
 
+**"Imagine 1.5 Quality is not answering right now"** (or any model's name)
+xAI answered with *"The model … does not exist or your team … does not have
+access to it"*. That wording reads like a permissions or billing problem and,
+so far, has been neither. On 18 September 2026 it appeared three times in two
+minutes against a model the team had access to, with credit in the account, and
+the same model worked again later that day: xAI stopped serving it to our
+server for a few minutes. Nothing is charged for a request turned away like
+this. Switch model, or wait a few minutes. If it never recovers — see the next
+section for how to tell — then it is real: check the model still exists in the
+xAI console and that the key on the server can use it.
+
 **"Some frames did not arrive"**
 Part of a run failed while the rest succeeded. The images that came back are kept
 and charged; the ones that did not show a card with an Again button that retries
