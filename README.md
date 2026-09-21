@@ -114,6 +114,45 @@ who already has the password, and it will not stop a patient attacker forever.
 The real boundary is not putting the URL anywhere public: no link in a shared
 document, no post, no screenshot with the address in it.
 
+## Using the studio
+
+The page is a gallery with one composer docked at the bottom. Everything you
+type or attach lives there.
+
+- **No modes.** With nothing attached it generates. Attach a photo and it
+  edits. Attach two or more and a switch asks: *Combine into one* or *Edit each*.
+- **Attaching photos.** The **+** tile, a drop anywhere on the page, or a paste
+  from the clipboard. Each photo becomes a chip; the first is the *Base*.
+  Drag chips to reorder, or focus one and press Alt with the left or right
+  arrow. Click a chip for its menu: make it the base, move it, crop it,
+  remove it.
+- **Referring to a photo.** Type `@` in the prompt and pick one. It inserts the
+  plain words "photo 2", which is what the model reads.
+- **Settings are pills** under the prompt: model, shape, size, quality, and a
+  stepper for frames (variants on an edit). The estimated cost sits by the
+  button. Ctrl + Enter submits.
+- **Results.** The gallery is pictures and nothing else, large. Click one to
+  open the viewer: the page blurs behind it and a card on the right holds
+  everything — the prompt, the photos it was made from, model, size, cost, when
+  and by whom — and every action: download, download all, *use as reference*
+  (sends it into the composer as a photo), run again, reuse, add to the
+  library, delete. On the gallery itself only a star and a tick box appear on
+  hover, for favouriting and for selecting several to download or delete.
+- **History keeps the photos.** The photos attached to an edit are saved with
+  it and shown on its card in the viewer. *Reuse photos and prompt* puts
+  them back in the composer, in their original order; *Run this again* repeats
+  the edit as it was. Neither needs the files found and attached again, and
+  both still work after a reload.
+- **Library.** Star a frame and it goes in the *Library*: one wall of every
+  favourite, loaded from the whole history rather than only the recent runs.
+  Favourites are never cleared to make room.
+- **Top bar.** *All / Mine / Library* chooses what the gallery shows. Beside
+  *Spent today* it shows what is left of the prepaid credit, when the server has
+  been given a management key (below). The round button holds your *Working as*
+  name and the dark or light theme.
+- **Permission.** The first combined edit of a session asks you to confirm you
+  have permission to use the likenesses involved.
+
 ## Models and prices
 
 | Model | Shown as | 1k | 2k | Per source image on edits |
@@ -166,7 +205,7 @@ not derivable from a formula: 1:1 doubles between 1k and 2k while 16:9 grows by
 | 21:9 | 1568×672 | 3136×1344 |
 
 On **Auto** the model picks the shape, so the size depends on what it chooses;
-the rail quotes the budget (≈1 MP or ≈4 MP) instead of inventing a pair. Results
+the size pill's list quotes the budget (about 1 MP or about 4 MP) instead of inventing a pair. Results
 and the lightbox always report the dimensions of the image that actually arrived,
 so if xAI changes this table you will see it there first — and the table in
 `public/app.js` should then be re-measured, not recalculated.
@@ -277,8 +316,8 @@ is lost to a deploy. A volume has a size limit set by your Railway plan, and
 
 ### Editing several photos at once
 
-Drop two or more photos into edit mode and the rail asks which of two different
-things you want, because it cannot guess:
+Attach two or more photos and a switch appears in the composer asking which of two
+different things you want, because it cannot guess:
 
 - **Combine into one** *(the default)* — one image out. The first photo is the
   base and everything in it is kept; the others contribute only what the prompt
@@ -310,7 +349,7 @@ treatment that gave the closest likeness in testing. It costs nothing extra.
 **Imagine 2.0 at 2k, by default.** The moment a second photo lands, the model
 switches to Imagine 2.0 and the size to 2k. Resolution made the widest
 difference in the experiment — 1k was the weakest transfer of the four — so the
-rail warns if you drop back to 1k. A choice you make after that stands.
+size pill turns amber, and the hint line says why, if you drop back to 1K. A choice you make after that stands.
 
 **Variants.** The count slider becomes *Variants* on an edit, one to four, so
 one run gives several draws to choose from. Each variant is its own request and
@@ -367,8 +406,8 @@ is the one being kept.
 Four variants from one request differed only in individual curls and the exact
 eyebrow line — same face, same shirt, same framing. If a result is wrong,
 change the prompt or the crop and run once. Do not spend on four variants
-expecting four different options. The rail says the same under the *Variants*
-control.
+expecting four different options. The hint line under the composer says the same whenever
+variants is above one.
 
 #### Permission and the likeness rule
 
@@ -407,7 +446,7 @@ preservation-inventory extractor.
 
 After that date, calls to `grok-imagine-image-quality` are served by
 `grok-imagine-image-2.0` at low quality — same request, different picture. Whenever
-that model is selected the rail shows a live day count, switching to hours inside
+that model is selected a notice above the composer shows a live day count, switching to hours inside
 the last two days, and to a "retired" notice after the date. The count is computed
 from the current date each time the page loads or regains focus; nothing is
 hardcoded, so it stays honest without anyone editing it.
@@ -471,6 +510,37 @@ tail -n 10 usage.jsonl
 
 ---
 
+### Showing what is left of the credit
+
+*Spent today* is this app's own count. What is actually left on the xAI account
+can only be read from xAI's **Management API**, a separate service with its own
+key. It is optional:
+
+1. In the xAI console open **Settings → Management Keys** and create a key.
+2. Set it on the server as `XAI_MANAGEMENT_KEY` (on Railway, in Variables).
+3. Restart. The top bar now reads `Spent today $2.40 · $41.27 left`.
+
+The server makes two read-only billing calls, caches the answer for a minute,
+and never sends the key to the browser. The figure is the prepaid ledger less
+what has been used in the current billing cycle, because xAI only posts spend
+to the ledger when a cycle closes. **Compare it once against the console's
+Billing page** after setting it up. A `≈` before the amount means this cycle's
+spend could not be read, so the real figure may be lower. Under $5 it turns
+amber. If the key is missing, wrong, or xAI is not answering, the amount is
+simply not shown — nothing about generating depends on it — and the reason is
+printed once in the deploy log as `[balance]`.
+
+### The photos attached to edits are kept
+
+So that a past edit can be repeated, the photos sent with it are saved in
+`DATA_DIR/sources`, named by a hash of their contents, so the same photo is
+stored once however often it is used. They follow the same rule as generated
+images: fetched by an unguessable name, listed only behind the password, and
+the oldest are cleared past `MAX_STORED_IMAGES` (counted separately from the
+images). These are often pictures of real people. `sources/` is in
+`.gitignore`; treat the data folder and any backup of it accordingly. Setting
+`SAVE_IMAGES=false` stops them being kept, along with everything else.
+
 ### Reading failures in the deploy log
 
 Every request xAI refuses, and every one that times out or cannot connect,
@@ -529,6 +599,8 @@ the shape, size or quality they chose; the line says what xAI objected to.
 | `DATA_DIR` | an attached Railway volume if there is one, else the project folder | Where saved images, favourites and `usage.jsonl` live. Must be on a mounted volume on any host that replaces its disk on deploy. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
+| `XAI_MANAGEMENT_KEY` | *(none)* | Optional. An xAI **management** key. When set, the top bar shows the prepaid credit that is left. Read-only billing calls; never sent to the browser. |
+| `XAI_TEAM_ID` | looked up from the API key | Only needed if that lookup fails. |
 | `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model behind `/api/describe`, which reads photographs and answers in text. Must accept image input. |
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Only for a gateway, or a stub while testing. |
 
@@ -569,10 +641,9 @@ same time. The button unlocks on the countdown, which comes from xAI's own
 The account balance is empty. Top it up in the xAI console. Images already on the
 page still download.
 
-**"Add a photo to edit"**
-Edit mode needs at least one photo. Drop two or more and the rail asks whether to
-combine them into one image or edit each — see *Editing several photos at once*
-above.
+**The button did nothing**
+It is never disabled without a word: press it and the line under the composer
+says what is missing — a prompt, three words, or too many photos to combine.
 
 **"Confirm permission first"**
 A combined edit was sent without the once-a-session confirmation. Tick the box

@@ -1,9 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Imagine studio</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- Set the theme before first paint, so a light-theme user never sees a dark flash. -->
+<script>
+  try {
+    var t = JSON.parse(localStorage.getItem('imagine-studio/theme'));
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* storage blocked: the dark default stands */ }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap">
@@ -11,9 +20,10 @@
 </head>
 <body>
 
-<!-- ========== 01 Password gate ========== -->
+<!-- ========== Password gate ========== -->
 <div class="gate" id="gate" hidden>
-  <form class="gate__card on-page" id="gate-form" novalidate>
+  <form class="gate__card" id="gate-form" novalidate>
+    <div class="gate__mark" aria-hidden="true"></div>
     <h1 class="gate__title">Imagine studio</h1>
     <p class="gate__sub">Shared team access. Ask in #design-ops if you need the password.</p>
     <label class="label" for="gate-password">Team password</label>
@@ -21,7 +31,7 @@
       <input class="input" type="password" id="gate-password" name="password"
              placeholder="Enter password" autocomplete="current-password"
              aria-describedby="gate-error">
-      <button class="password-toggle on-sunken" type="button" id="gate-password-toggle"
+      <button class="password-toggle" type="button" id="gate-password-toggle"
               aria-label="Show password" aria-pressed="false" title="Show password">
         <svg class="icon-eye" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
           <path d="M1 9s2.9-5 8-5 8 5 8 5-2.9 5-8 5-8-5-8-5Z" stroke="currentColor" stroke-width="1.4"
@@ -37,247 +47,228 @@
       </button>
     </div>
     <div class="field-error" id="gate-error" role="alert" hidden></div>
-    <button class="btn-action" type="submit" id="gate-submit" style="margin-top:20px">Unlock studio</button>
+    <button class="btn-primary btn-primary--block" type="submit" id="gate-submit">Unlock studio</button>
   </form>
 </div>
 
 <!-- ========== The studio ========== -->
 <div id="app" hidden>
 
-  <!-- 02 Top bar -->
   <header class="topbar">
-    <div class="topbar__brand">Imagine studio</div>
-    <div class="topbar__rule" aria-hidden="true"></div>
-    <div class="topbar__who">
-      <span id="name-label">Working as</span>
-      <input class="name-input" id="user-name" type="text" placeholder="Add your name"
-             aria-labelledby="name-label" autocomplete="name" maxlength="40">
+    <div class="topbar__brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Imagine studio</span>
     </div>
+
+    <!-- What the gallery shows. A radiogroup: exactly one is on. -->
+    <div class="seg" id="filters" role="radiogroup" aria-label="Show">
+      <button class="seg__btn" type="button" role="radio" data-filter="all" aria-checked="true">All</button>
+      <button class="seg__btn" type="button" role="radio" data-filter="mine" aria-checked="false" tabindex="-1">Mine</button>
+      <button class="seg__btn" type="button" role="radio" data-filter="fav" aria-checked="false" tabindex="-1">Library</button>
+    </div>
+
+    <div class="topbar__spacer"></div>
+
     <div class="topbar__spend">
       <span class="topbar__spend-label">Spent today</span>
       <span class="topbar__spend-amount num" id="spend-amount">$0.00</span>
       <span class="topbar__spend-runs num" id="spend-runs" hidden></span>
+      <!-- What is left of the prepaid credit. Only when the server has a
+           management key; otherwise this stays hidden and nothing is implied. -->
+      <span class="topbar__left num" id="balance" hidden></span>
+    </div>
+
+    <div class="who">
+      <button class="avatar" type="button" id="who-btn" aria-haspopup="dialog" aria-expanded="false"
+              aria-controls="who-pop" aria-label="Your name and appearance"></button>
+      <div class="popover popover--who" id="who-pop" role="dialog" aria-label="Your name and appearance" hidden>
+        <label class="label" for="user-name">Working as</label>
+        <input class="input" id="user-name" type="text" placeholder="Add your name" autocomplete="name" maxlength="40">
+        <p class="popover__note">Your name goes on the runs you make, so the team can tell whose is whose.</p>
+        <span class="label" id="theme-label">Appearance</span>
+        <div class="seg seg--block" id="theme" role="radiogroup" aria-labelledby="theme-label">
+          <button class="seg__btn" type="button" role="radio" data-theme-choice="dark" aria-checked="true">Dark</button>
+          <button class="seg__btn" type="button" role="radio" data-theme-choice="light" aria-checked="false" tabindex="-1">Light</button>
+        </div>
+      </div>
     </div>
   </header>
 
-  <main class="studio">
-
-    <!-- 04 / 07 Rail. Order never changes: mode switch, prompt, model, quality,
-         shape and size, frames, action. -->
-    <form class="rail" id="rail" novalidate>
-
-      <div class="modeswitch" id="modeswitch" role="tablist" aria-label="What to do">
-        <button class="modeswitch__btn" type="button" role="tab" id="tab-generate"
-                data-mode="generate" aria-selected="true" aria-controls="rail-fields">Generate</button>
-        <button class="modeswitch__btn" type="button" role="tab" id="tab-edit"
-                data-mode="edit" aria-selected="false" aria-controls="rail-fields" tabindex="-1">Edit photos</button>
-      </div>
-
-      <div id="rail-fields" style="display:contents">
-
-        <!-- Photo to edit — edit mode only -->
-        <div class="field" id="source-field" hidden>
-          <span class="label" id="source-label">Photos to edit</span>
-
-          <button class="dropzone on-sunken" type="button" id="dropzone" aria-describedby="source-label">
-            <span class="dropzone__title" id="dropzone-title">Drop photos here</span>
-            <span class="dropzone__body" id="dropzone-body">Or <span class="dropzone__link">choose files</span>. JPG, PNG or WebP, up to 10 MB each.</span>
-          </button>
-          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple class="visually-hidden" tabindex="-1">
-
-          <!-- One row per loaded photo, in sending order. Rows reorder by drag
-               or by their arrows; with two or more photos combined into one,
-               the first row is the base and carries a badge saying so. -->
-          <div class="source-list" id="source-list"></div>
-          <div class="hint" id="source-hint" hidden></div>
-
-        </div>
-
-        <!-- Two or more photos are ambiguous: one image out, or one per photo.
-             The page asks rather than guesses. -->
-        <div class="field" id="plan-field" hidden>
-          <span class="label" id="plan-label">With these photos</span>
-          <div class="modeswitch modeswitch--sub" id="plan" role="radiogroup" aria-labelledby="plan-label">
-            <button class="modeswitch__btn" type="button" role="radio" id="plan-reference"
-                    data-plan="reference" aria-checked="true">Combine into one</button>
-            <button class="modeswitch__btn" type="button" role="radio" id="plan-each"
-                    data-plan="each" aria-checked="false" tabindex="-1">Edit each</button>
-          </div>
-          <div class="hint" id="plan-hint"></div>
-        </div>
-
-        <!-- Combining photos carries one person's likeness into another picture.
-             Confirmed once a session, before the first such run; the server
-             refuses a combined edit that does not carry the confirmation. -->
-        <div class="field" id="consent-field" hidden>
-          <div class="notice notice--warning">
-            <div class="notice__title">Real people, real likenesses</div>
-            <div class="notice__body">Combining puts one person’s face into another picture. Confirm once a session that you have permission from everyone shown in these photos.</div>
-            <label class="check">
-              <input type="checkbox" id="consent">
-              <span>I have permission to use every likeness in these photos</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Prompt -->
-        <div class="field">
-          <label class="label" for="prompt" id="prompt-label">What should it make?</label>
-          <textarea class="textarea textarea--generate" id="prompt" maxlength="1000"
-                    placeholder="Describe the image — subject, setting, light, mood"
-                    aria-describedby="prompt-hint"></textarea>
-          <div class="hint-row" id="prompt-hint">
-            <span id="prompt-guidance">Plain description works better than keywords.</span>
-            <span class="num" id="prompt-count">0 / 1000</span>
-          </div>
-        </div>
-
-        <!-- Model -->
-        <div class="field">
-          <label class="label" for="model">Model</label>
-          <div class="select-shell on-sunken">
-            <select id="model"></select>
-            <span class="select-note" id="model-note" hidden></span>
-            <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-              <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <!-- 09 Retirement notice — sits with the choice it belongs to. Never a
-               modal, never a top-of-page banner, no close control. -->
-          <div id="retirement" hidden></div>
-        </div>
-
-        <!-- Quality — only for models that accept it -->
-        <div class="field" id="quality-field" hidden>
-          <label class="label" for="quality">Quality</label>
-          <div class="select-shell on-sunken">
-            <select id="quality">
-              <option value="auto">Auto</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-            </select>
-            <span class="select-note num" id="quality-note"></span>
-            <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-              <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <div class="hint" id="quality-hint">Higher quality costs more and takes longer.</div>
-        </div>
-
-        <!-- Shape and size. Sent on edits as well: the output otherwise follows
-             the first photo, which is not what was chosen. -->
-        <div class="row-2" id="shape-size">
-          <div class="field">
-            <label class="label" for="shape">Shape</label>
-            <div class="select-shell on-sunken">
-              <select id="shape" class="num"></select>
-              <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </div>
-          </div>
-          <div class="field">
-            <label class="label" for="size">Size</label>
-            <div class="select-shell on-sunken">
-              <select id="size" class="num"></select>
-              <svg class="select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
-                <path d="M1 1l4 4 4-4" stroke="#6B7C75" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </div>
-          </div>
-        </div>
-        <div class="hint hint--warning" id="size-hint" hidden></div>
-
-        <!-- Frames on a generation, variants on an edit (1–4: every variant
-             re-sends every source photo). Removed, not disabled, when several
-             photos are edited apart — that is one image per photo. -->
-        <div class="field" id="frames-field">
-          <div class="slider-head">
-            <label for="frames" id="frames-label">Frames</label>
-            <span class="slider-value num is-idle" id="frames-value">1 frame</span>
-          </div>
-          <input class="slider on-surface" type="range" id="frames" min="1" max="10" step="1" value="1">
-          <div class="slider-scale num" aria-hidden="true"><span>1</span><span id="frames-max">10</span></div>
-          <div class="hint" id="frames-hint" hidden></div>
-        </div>
-
-        <!-- Working as — moves here from the top bar on phones -->
-        <div class="field" id="mobile-who" hidden>
-          <label class="label" for="user-name-mobile">Working as</label>
-          <input class="input" id="user-name-mobile" type="text" placeholder="Add your name"
-                 autocomplete="name" maxlength="40">
-        </div>
-
-      </div>
-
-      <hr class="rule">
-
-      <div class="action-block">
-        <button class="btn-action" type="submit" id="action">Generate</button>
-        <div class="hint" id="action-reason">Write a prompt to start. Nothing is charged until you generate.</div>
-        <div class="cost-line num" id="cost-line" hidden>
-          <span id="cost-label">Estimated cost</span>
-          <strong id="cost-value">$0.00</strong>
-        </div>
-        <div class="cancel-row" id="cancel-row" hidden>
-          <button class="btn-destructive" type="button" id="cancel-run">Cancel run</button>
-        </div>
-      </div>
-
-      <!-- 10 Errors appear directly under the action button, at rail width. They
-           sit outside the action block because that block pins to the viewport on
-           phones, where a long error has no room and would be cut off. -->
-      <div id="run-error" role="alert"></div>
-    </form>
-
-    <!-- 03 / 06 Results -->
+  <main class="stage">
     <section class="results" id="results" aria-live="polite" aria-label="Runs">
       <div class="empty" id="empty">
-        <div class="empty__swatches" aria-hidden="true">
-          <span style="background:#E3E8E4"></span>
-          <span style="background:#EDE6E2"></span>
-          <span style="background:#D9E2DE"></span>
-        </div>
-        <div>
-          <h2 class="empty__title">Your first run goes here</h2>
-          <p class="empty__body">Describe an image in the rail and generate up to ten frames at once. Every run stays on this page so you can compare them side by side.</p>
-        </div>
-        <div class="empty__seeds">
-          <div class="empty__seeds-label" id="seeds-label">Or start from one of these</div>
-          <button class="seed on-surface" type="button" data-seed="Flat-lay of autumn produce on unbleached linen, window light">
-            <span class="seed__text">Flat-lay of autumn produce on unbleached linen, window light</span>
-            <span class="seed__cta">Use this prompt</span>
-          </button>
-          <button class="seed on-surface" type="button" data-seed="Empty studio corner, one chair, late afternoon shadow">
-            <span class="seed__text">Empty studio corner, one chair, late afternoon shadow</span>
-            <span class="seed__cta">Use this prompt</span>
-          </button>
-          <button class="seed on-surface" type="button" data-seed="Close crop of hand-thrown ceramic glaze, matte finish">
-            <span class="seed__text">Close crop of hand-thrown ceramic glaze, matte finish</span>
-            <span class="seed__cta">Use this prompt</span>
-          </button>
+        <h2 class="empty__title" id="empty-title">Describe an image to begin</h2>
+        <p class="empty__body" id="empty-body">Type below and generate up to ten frames at once. Add photos to edit them, or to combine several into one picture. Every run stays on this page.</p>
+        <div class="empty__seeds" id="empty-seeds">
+          <button class="seed" type="button" data-seed="Flat-lay of autumn produce on unbleached linen, window light">Flat-lay of autumn produce on unbleached linen, window light</button>
+          <button class="seed" type="button" data-seed="Empty studio corner, one chair, late afternoon shadow">Empty studio corner, one chair, late afternoon shadow</button>
+          <button class="seed" type="button" data-seed="Close crop of hand-thrown ceramic glaze, matte finish">Close crop of hand-thrown ceramic glaze, matte finish</button>
         </div>
       </div>
     </section>
-
   </main>
-</div>
 
-<!-- 08 Lightbox -->
-<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Frame viewer" hidden>
-  <div class="lightbox__bar">
-    <span class="lightbox__count num" id="lb-count"></span>
-    <span class="lightbox__meta num" id="lb-meta"></span>
-    <div class="lightbox__tools">
-      <button class="lb-btn lb-btn--primary" type="button" id="lb-download">Download</button>
-      <button class="lb-btn" type="button" id="lb-edit">Edit this</button>
-      <button class="lb-btn" type="button" id="lb-close">Close</button>
+  <!-- ========== The dock: everything you type or attach, in one place ==========
+       Order inside never changes: notices, then the panel a chip opens, then the
+       composer. It is fixed to the bottom; the gallery scrolls behind it. -->
+  <div class="dock" id="dock">
+    <div class="dock__inner">
+
+      <div id="run-error" role="alert"></div>
+      <div id="retirement" hidden></div>
+
+      <!-- Opened from a photo chip: its menu, or the crop tool. -->
+      <div class="panel" id="chip-panel" hidden></div>
+
+      <!-- Opened by typing @ in the prompt when photos are attached. -->
+      <div class="panel panel--menu" id="mention-menu" role="listbox" aria-label="Refer to a photo" hidden></div>
+
+      <form class="composer" id="rail" novalidate>
+
+        <div class="composer__top" id="composer-top">
+          <!-- Attached photos, in sending order. The first is the base. -->
+          <div class="chips" id="source-list" role="list" aria-label="Attached photos"></div>
+          <button class="chip-add" type="button" id="dropzone" aria-label="Add photos"
+                  title="Add photos — or drop them anywhere, or paste">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M9 3.5v11M3.5 9h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple class="visually-hidden" tabindex="-1">
+
+          <!-- Two or more photos are ambiguous: one image out, or one per photo.
+               The page asks rather than guesses. -->
+          <div class="seg seg--small" id="plan" role="radiogroup" aria-label="With these photos" hidden>
+            <button class="seg__btn" type="button" role="radio" id="plan-reference" data-plan="reference" aria-checked="true">Combine into one</button>
+            <button class="seg__btn" type="button" role="radio" id="plan-each" data-plan="each" aria-checked="false" tabindex="-1">Edit each</button>
+          </div>
+        </div>
+
+        <label class="visually-hidden" for="prompt" id="prompt-label">What should it make?</label>
+        <textarea class="composer__prompt" id="prompt" maxlength="1000" rows="1"
+                  placeholder="Describe the image — subject, setting, light, mood"
+                  aria-describedby="composer-hint"></textarea>
+
+        <div class="composer__bar">
+          <div class="pills" id="pills">
+            <label class="pill" id="model-pill" title="Model">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1.5l1.3 3.2 3.2 1.3-3.2 1.3L7 10.5 5.7 7.3 2.5 6l3.2-1.3L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="pill__text" id="model-text"></span>
+              <select class="pill__select" id="model" aria-label="Model"></select>
+            </label>
+            <label class="pill" id="shape-pill" title="Shape">
+              <span class="ratio" id="shape-icon" aria-hidden="true"></span>
+              <span class="pill__text" id="shape-text"></span>
+              <select class="pill__select num" id="shape" aria-label="Shape"></select>
+            </label>
+            <label class="pill" id="size-pill" title="Size">
+              <span class="pill__text num" id="size-text"></span>
+              <select class="pill__select num" id="size" aria-label="Size"></select>
+            </label>
+            <label class="pill" id="quality-field" title="Quality" hidden>
+              <span class="pill__text" id="quality-text"></span>
+              <select class="pill__select" id="quality" aria-label="Quality">
+                <option value="auto">Auto</option>
+              </select>
+            </label>
+            <div class="pill pill--stepper" id="frames-field" role="group" aria-labelledby="frames-label">
+              <span class="visually-hidden" id="frames-label">Frames</span>
+              <button class="pill__step" type="button" id="frames-minus" aria-label="Fewer">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 6h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </button>
+              <span class="pill__count num" id="frames-value" aria-live="polite">1</span>
+              <button class="pill__step" type="button" id="frames-plus" aria-label="More">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 2.5v7M2.5 6h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="composer__go">
+            <span class="cost num" id="cost-value" title="Estimated cost"></span>
+            <button class="btn-quiet" type="button" id="cancel-run" hidden>Cancel</button>
+            <button class="btn-primary" type="submit" id="action">Generate</button>
+          </div>
+        </div>
+
+        <!-- One line, never more: whichever piece of guidance matters most now. -->
+        <div class="composer__hint" id="composer-hint"></div>
+      </form>
     </div>
   </div>
-  <div class="lightbox__stage"><img id="lb-image" alt=""></div>
-  <div class="lightbox__caption">
-    <p id="lb-prompt"></p>
-    <span class="num" id="lb-time"></span>
+
+  <!-- Shown while files are dragged over the window. -->
+  <div class="dropveil" id="dropveil" hidden><div class="dropveil__box">Drop to add as a photo</div></div>
+</div>
+
+<!-- ========== The viewer ==========
+     The gallery shows pictures and nothing else. Everything about a picture —
+     what was asked for, what it was made from, what it cost, and everything
+     that can be done with it — lives on the card here, over a blurred view of
+     the page behind. -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Frame viewer" hidden>
+  <div class="lightbox__stage">
+    <button class="lb-nav lb-nav--prev" type="button" id="lb-prev" aria-label="Previous frame">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <img id="lb-image" alt="">
+    <button class="lb-nav lb-nav--next" type="button" id="lb-next" aria-label="Next frame">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7.5 4.5L13 10l-5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <aside class="lightbox__side">
+    <div class="lightbox__head">
+      <span class="lightbox__count num" id="lb-count"></span>
+      <!-- Keeping and discarding are about the picture itself, so they sit up
+           here as quiet icons beside Close, not in a stack of buttons. -->
+      <span class="lightbox__icons">
+        <button class="icon-btn icon-btn--star" type="button" id="lb-fav" aria-pressed="false" aria-label="Add to library">
+          <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8l1.9 3.85 4.25.62-3.08 3 .73 4.23L8 11.5l-3.8 2 .73-4.23-3.08-3 4.25-.62z"/></svg>
+        </button>
+        <button class="icon-btn icon-btn--danger" type="button" id="lb-delete" aria-label="Delete"></button>
+        <button class="icon-btn" type="button" id="lb-close" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </span>
+    </div>
+
+    <div class="lightbox__scroll">
+      <!-- Reuse belongs with the thing being reused: the prompt. -->
+      <div class="lightbox__labelrow">
+        <span class="lightbox__label">Prompt</span>
+        <button class="btn-text" type="button" id="lb-reuse">Reuse prompt</button>
+      </div>
+      <p class="lightbox__prompt" id="lb-prompt"></p>
+
+      <div id="lb-sources-block" hidden>
+        <div class="lightbox__label" id="lb-sources-label">Made from</div>
+        <div class="lightbox__sources" id="lb-sources"></div>
+      </div>
+
+      <div class="lightbox__label">Details</div>
+      <dl class="lightbox__facts num" id="lb-meta"></dl>
+    </div>
+
+    <!-- One button — the thing people come here to do. The rest are links. -->
+    <div class="lightbox__tools">
+      <button class="btn-primary btn-primary--block" type="button" id="lb-download">Download</button>
+      <div class="lightbox__links">
+        <button class="btn-text" type="button" id="lb-edit">Use as reference</button>
+        <button class="btn-text" type="button" id="lb-again">Run again</button>
+        <button class="btn-text" type="button" id="lb-download-all" hidden>Download all</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ========== Likeness permission — asked once a session ========== -->
+<div class="dialog-veil" id="consent-dialog" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="consent-title" aria-describedby="consent-body">
+    <h2 class="dialog__title" id="consent-title">Real people, real likenesses</h2>
+    <p class="dialog__body" id="consent-body">Combining photos puts one person’s face into another picture. Confirm that you have permission from everyone shown in these photos. You will be asked once per session.</p>
+    <div class="dialog__actions">
+      <button class="btn-quiet" type="button" id="consent-cancel">Cancel</button>
+      <button class="btn-primary" type="button" id="consent-ok">I have permission</button>
+    </div>
   </div>
 </div>
 

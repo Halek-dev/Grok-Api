@@ -2,6 +2,11 @@
    Imagine studio — client
    Vanilla JS, no framework, no build step.
 
+   The page is a gallery with one composer docked at the bottom. Everything a
+   person types or attaches lives in that composer: the prompt, the photos (as
+   chips, in sending order), and the settings (as pills). There are no modes to
+   pick — with no photos attached it generates; attach one and it edits.
+
    Prices are never hardcoded here. They arrive from /api/config and every
    estimate is recomputed from that object. If a model has no price entry the UI
    says the cost is unknown rather than showing a wrong one.
@@ -13,22 +18,7 @@
   // -------------------------------------------------------------------------
   // Constants that are UI copy, not money and not API behaviour
   // -------------------------------------------------------------------------
-
-  // Shape values are the aspect_ratio enum the API accepts. Labels are the ratio
-  // itself — the user never sees an API enum name.
-  var SHAPES = [
-    { value: 'auto',  label: 'Auto' },
-    { value: '1:1',   label: '1:1' },
-    { value: '16:9',  label: '16:9' },
-    { value: '9:16',  label: '9:16' },
-    { value: '4:3',   label: '4:3' },
-    { value: '3:4',   label: '3:4' },
-    { value: '3:2',   label: '3:2' },
-    { value: '2:3',   label: '2:3' },
-    { value: '2:1',   label: '2:1' },
-    { value: '21:9',  label: '21:9' }
-  ];
-
+  var SHAPES = ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '21:9'];
   var RESOLUTIONS = ['1k', '2k'];
 
   // Limits of the edits endpoint. Overwritten from /api/config at boot so the
@@ -36,9 +26,11 @@
   var MAX_EDIT_SOURCES = 5;
   var MAX_EDIT_VARIANTS = 4;
   var MAX_FRAMES = 10;
+  // The most photos in the composer at once: ten edits in one run.
+  var MAX_SOURCES = 10;
 
   // A reference crop is upscaled so its short side is at least this, with
-  // smoothing off — the same treatment the experiment used. Upscale only.
+  // smoothing off — the treatment that transferred a likeness best. Upscale only.
   var CROP_TARGET_SHORT = 1536;
 
   var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -46,6 +38,18 @@
   var STORE_KEY = 'imagine-studio/settings';
   var SPEND_KEY = 'imagine-studio/spend';
   var PASS_KEY = 'imagine-studio/password';
+  var THEME_KEY = 'imagine-studio/theme';
+
+  var ICONS = {
+    download: '<path d="M8 2.5v8M4.8 7.6L8 10.8l3.2-3.2M3 13.5h10"/>',
+    reference: '<path d="M8.5 2.5h-4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-4M2.5 10.5l3-3 3 3 2-2 3 3M12 1.5v5M9.5 4h5"/>',
+    again: '<path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/>',
+    trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 0 0 1 1h3.8a1 1 0 0 0 1-1l.6-8"/>',
+    star: '<path d="M8 1.8l1.9 3.85 4.25.62-3.08 3 .73 4.23L8 11.5l-3.8 2 .73-4.23-3.08-3 4.25-.62z"/>',
+    x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+    crop: '<path d="M4.5 1.5v10h10M1.5 4.5h10v10"/>',
+    user: '<path d="M8 8a2.75 2.75 0 1 0 0-5.5A2.75 2.75 0 0 0 8 8ZM2.8 13.5c.6-2.3 2.7-3.5 5.2-3.5s4.6 1.2 5.2 3.5"/>'
+  };
 
   // -------------------------------------------------------------------------
   // Element handles
@@ -56,49 +60,44 @@
       gateError = $('gate-error'), gateSubmit = $('gate-submit'),
       gateToggle = $('gate-password-toggle');
   var app = $('app');
-  var userName = $('user-name'), userNameMobile = $('user-name-mobile'), mobileWho = $('mobile-who');
-  var spendAmount = $('spend-amount'), spendRuns = $('spend-runs');
-  var rail = $('rail'), modeswitch = $('modeswitch');
-  var tabGenerate = $('tab-generate'), tabEdit = $('tab-edit');
-  var promptEl = $('prompt'), promptLabel = $('prompt-label'), promptCount = $('prompt-count'),
-      promptGuidance = $('prompt-guidance');
-  var modelEl = $('model'), modelNote = $('model-note'), retirementEl = $('retirement');
-  var qualityField = $('quality-field'), qualityEl = $('quality'), qualityNote = $('quality-note');
-  var shapeSize = $('shape-size'), shapeEl = $('shape'), sizeEl = $('size');
-  var framesField = $('frames-field'), framesEl = $('frames'), framesValue = $('frames-value'),
-      framesLabel = $('frames-label'), framesMax = $('frames-max'), framesHint = $('frames-hint');
-  var sizeHint = $('size-hint');
-  var sourceField = $('source-field'), dropzone = $('dropzone'), fileInput = $('file-input'),
-      dropzoneTitle = $('dropzone-title'), dropzoneBody = $('dropzone-body'),
-      sourceList = $('source-list'), sourceLabel = $('source-label'), sourceHint = $('source-hint');
-  var planField = $('plan-field'), planSwitch = $('plan'), planReference = $('plan-reference'),
-      planEach = $('plan-each'), planHint = $('plan-hint');
-  var consentField = $('consent-field'), consentBox = $('consent');
-
-  var actionBtn = $('action'), actionReason = $('action-reason'),
-      costLine = $('cost-line'), costLabel = $('cost-label'), costValue = $('cost-value');
-  var runError = $('run-error');
-  var cancelRow = $('cancel-row'), cancelBtn = $('cancel-run');
-  var results = $('results'), empty = $('empty');
+  var filtersEl = $('filters');
+  var spendAmount = $('spend-amount'), spendRuns = $('spend-runs'), balanceEl = $('balance');
+  var whoBtn = $('who-btn'), whoPop = $('who-pop'), userName = $('user-name'), themeEl = $('theme');
+  var results = $('results'), empty = $('empty'), emptyTitle = $('empty-title'),
+      emptyBody = $('empty-body'), emptySeeds = $('empty-seeds');
+  var dock = $('dock'), runError = $('run-error'), retirementEl = $('retirement'),
+      chipPanel = $('chip-panel'), mentionMenu = $('mention-menu'), dropveil = $('dropveil');
+  var rail = $('rail'), sourceList = $('source-list'), addBtn = $('dropzone'), fileInput = $('file-input');
+  var planSwitch = $('plan'), planReference = $('plan-reference'), planEach = $('plan-each');
+  var promptEl = $('prompt'), promptLabel = $('prompt-label'), hintEl = $('composer-hint');
+  var modelEl = $('model'), modelText = $('model-text');
+  var shapeEl = $('shape'), shapeText = $('shape-text'), shapeIcon = $('shape-icon');
+  var sizeEl = $('size'), sizeText = $('size-text'), sizePill = $('size-pill');
+  var qualityField = $('quality-field'), qualityEl = $('quality'), qualityText = $('quality-text');
+  var framesField = $('frames-field'), framesLabel = $('frames-label'), framesValue = $('frames-value'),
+      framesMinus = $('frames-minus'), framesPlus = $('frames-plus');
+  var costValue = $('cost-value'), cancelBtn = $('cancel-run'), actionBtn = $('action');
   var lightbox = $('lightbox'), lbCount = $('lb-count'), lbMeta = $('lb-meta'),
-      lbImage = $('lb-image'), lbPrompt = $('lb-prompt'), lbTime = $('lb-time'),
-      lbDownload = $('lb-download'), lbEdit = $('lb-edit'), lbClose = $('lb-close');
+      lbImage = $('lb-image'), lbPrompt = $('lb-prompt'),
+      lbDownload = $('lb-download'), lbEdit = $('lb-edit'), lbReuse = $('lb-reuse'),
+      lbAgain = $('lb-again'), lbClose = $('lb-close'), lbPrev = $('lb-prev'), lbNext = $('lb-next'),
+      lbSources = $('lb-sources'), lbSourcesBlock = $('lb-sources-block'), lbSourcesLabel = $('lb-sources-label'),
+      lbDownloadAll = $('lb-download-all'), lbFav = $('lb-fav'), lbDelete = $('lb-delete');
+  var consentDialog = $('consent-dialog'), consentOk = $('consent-ok'), consentCancel = $('consent-cancel');
 
   // -------------------------------------------------------------------------
-  // State. Runs and their images live in memory for the session only — nothing
-  // is stored server-side, so a refresh empties the sheet.
+  // State
   // -------------------------------------------------------------------------
   var config = null;
   var password = '';
   var state = {
-    mode: 'generate',
     model: '',
     quality: 'auto',
+    // Generating and editing each keep their own shape, size and count, so
+    // attaching a photo never silently re-crops or re-prices the other.
     shape: '9:16',
     resolution: '1k',
     frames: 1,
-    // Edit mode keeps its own shape, size and count, so switching tabs never
-    // silently re-crops or re-prices the other mode's settings.
     editShape: 'auto',
     editResolution: '1k',
     variants: 1,
@@ -106,14 +105,17 @@
     // first being the base; 'each' applies the instruction to every photo.
     plan: 'reference',
     name: '',
-    // [{ dataUri, original, name, size, width, height, crop }] in the order
-    // they will be sent. dataUri is what goes out — the crop, if one was made.
+    filter: 'all',
+    // [{ dataUri, original, originalSize, name, size, width, height, crop }] in
+    // the order they will be sent. dataUri is what goes out — the crop, if any.
     sources: []
   };
-  // Confirmed once per session before the first reference edit, and sent with
-  // every reference request so the server can refuse one that lacks it.
+  // Confirmed once per session before the first combined edit, and sent with
+  // every such request so the server can refuse one that lacks it.
   var likenessConsent = false;
+
   var runs = [];
+  var selected = new Set();
   var busy = false;
   var rateLimitUntil = 0;
   var rateLimitTimer = null;
@@ -123,19 +125,30 @@
   var retiredFallback = null;
   var lastFocused = null;
   var seq = 0;
+  var attention = '';      // why the last press of the button did nothing
+  var openChip = -1;       // index of the photo whose panel is open, or -1
+  var chipView = 'menu';   // 'menu' or 'crop'
+  var dragFrom = -1;       // index of the chip being dragged, or -1
+  var mention = null;      // { start, items, index } while the @ menu is open
 
   // -------------------------------------------------------------------------
   // Small helpers
   // -------------------------------------------------------------------------
-  function money(n) {
-    return '$' + Number(n).toFixed(2);
-  }
+  function money(n) { return '$' + Number(n).toFixed(2); }
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
     if (text != null) node.textContent = text;
     return node;
+  }
+
+  function icon(name, size) {
+    var s = size || 15;
+    var holder = document.createElement('span');
+    holder.innerHTML = '<svg width="' + s + '" height="' + s + '" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
+    return holder.firstChild;
   }
 
   function clockTime(date) {
@@ -154,15 +167,10 @@
 
   // xAI does not return one format: 1k comes back as JPEG, 2k as PNG, and that
   // is not something the request states. Read it off the bytes rather than
-  // assuming, or the data URI lies about its type and downloads get the wrong
-  // extension.
+  // assuming, or downloads get the wrong extension.
   function sniffImage(b64) {
     var head = '';
-    try {
-      head = atob(b64.slice(0, 16));
-    } catch (err) {
-      head = '';
-    }
+    try { head = atob(b64.slice(0, 16)); } catch (err) { head = ''; }
     if (head.charCodeAt(0) === 0x89 && head.slice(1, 4) === 'PNG') return { mime: 'image/png', ext: 'png' };
     if (head.charCodeAt(0) === 0xFF && head.charCodeAt(1) === 0xD8) return { mime: 'image/jpeg', ext: 'jpg' };
     if (head.slice(0, 4) === 'RIFF' && head.slice(8, 12) === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
@@ -178,27 +186,30 @@
     try {
       var raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : null;
-    } catch (err) {
-      return null;
-    }
+    } catch (err) { return null; }
   }
 
   function writeStore(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (err) {
-      /* private window, or storage full — the app still works, it just forgets */
-    }
+    try { localStorage.setItem(key, JSON.stringify(value)); }
+    catch (err) { /* private window, or storage full — the app still works, it just forgets */ }
+  }
+
+  function initials(name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '';
+    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+  }
+
+  function sameName(a, b) {
+    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   }
 
   // -------------------------------------------------------------------------
   // Shape and size. Sizes are shown as pixels, never as an API enum.
   //
   // These are xAI's real output sizes, measured one image per combination on
-  // 4 September 2026. They are not derivable from a formula: 1:1 exactly doubles
-  // between 1k and 2k while 16:9 scales by 2.2, and the ratios are held exactly
-  // rather than a pixel budget. If xAI changes what it returns, re-measure —
-  // do not try to compute these.
+  // 4 September 2026. They are not derivable from a formula. If xAI changes
+  // what it returns, re-measure — do not try to compute these.
   // -------------------------------------------------------------------------
   var SIZE_TABLE = {
     '1:1':  { '1k': [1024, 1024], '2k': [2048, 2048] },
@@ -212,21 +223,15 @@
     '21:9': { '1k': [1568,  672], '2k': [3136, 1344] }
   };
 
-  function dimsFor(shape, res) {
-    var row = SIZE_TABLE[shape];
-    return row && row[res] ? { w: row[res][0], h: row[res][1] } : null;
-  }
-
   function sizeLabel(shape, res) {
-    var d = dimsFor(shape, res);
-    if (d) return d.w + '×' + d.h;
+    var row = SIZE_TABLE[shape];
+    if (row && row[res]) return row[res][0] + '×' + row[res][1];
     // On "auto" the model picks the shape, so the pixels depend on what it
     // chooses. Quote the budget it works to instead of inventing a pair.
-    return res === '2k' ? '≈4 MP' : '≈1 MP';
+    return res === '2k' ? 'about 4 MP' : 'about 1 MP';
   }
 
-  // Null for "auto": the model chooses the frame, so guessing a ratio would only
-  // make the grid jump when the real image arrives.
+  // Null for "auto": the model chooses the frame.
   function aspectRatioCss(shape) {
     if (!shape || shape === 'auto') return null;
     var parts = String(shape).split(':');
@@ -234,67 +239,55 @@
   }
 
   // -------------------------------------------------------------------------
+  // What the composer is about to do
+  // -------------------------------------------------------------------------
+  function mode() { return state.sources.length ? 'edit' : 'generate'; }
+  function currentShape() { return mode() === 'edit' ? state.editShape : state.shape; }
+  function currentResolution() { return mode() === 'edit' ? state.editResolution : state.resolution; }
+  function currentCount() { return mode() === 'edit' ? state.variants : state.frames; }
+  function maxCount() { return mode() === 'edit' ? MAX_EDIT_VARIANTS : MAX_FRAMES; }
+  function isReference() { return state.sources.length > 1 && state.plan === 'reference'; }
+  function isEditEach() { return state.sources.length > 1 && state.plan === 'each'; }
+
+  // -------------------------------------------------------------------------
   // Cost. Mirrors the server, from the same price object.
   // -------------------------------------------------------------------------
-  function priceEntry(model) {
-    return config && config.prices ? config.prices[model] : null;
-  }
+  function priceEntry(model) { return config && config.prices ? config.prices[model] : null; }
 
   function acceptsQuality(model) {
     return Boolean(config && config.qualityModels && config.qualityModels.indexOf(model) !== -1);
   }
 
-  function tierFor(model, quality, mode) {
+  function tierFor(model, quality, m) {
     var p = priceEntry(model);
     if (!p || !p.tiers) return null;
     if (p.tiers['default']) return p.tiers['default'];
     if (!p.autoQuality) return null;
-    var q = (!quality || quality === 'auto')
-      ? p.autoQuality[mode === 'edit' ? 'edit' : 'generate']
-      : quality;
+    var q = (!quality || quality === 'auto') ? p.autoQuality[m === 'edit' ? 'edit' : 'generate'] : quality;
     return p.tiers[q] || null;
   }
 
   // Per-image output price. Returns null when we genuinely do not know.
-  function perImage(model, quality, resolution, mode) {
-    var tier = tierFor(model, quality, mode);
+  function perImage(model, quality, resolution, m) {
+    var tier = tierFor(model, quality, m);
     if (!tier) return null;
     var v = tier[resolution];
     return typeof v === 'number' ? v : null;
   }
 
-  // The mode's own settings. Generate and edit each keep theirs.
-  function currentShape() { return state.mode === 'edit' ? state.editShape : state.shape; }
-  function currentResolution() { return state.mode === 'edit' ? state.editResolution : state.resolution; }
-  function currentCount() { return state.mode === 'edit' ? state.variants : state.frames; }
-  function maxCount() { return state.mode === 'edit' ? MAX_EDIT_VARIANTS : MAX_FRAMES; }
-
-  // Two or more photos, combined into one image: the reference edit.
-  function isReference() {
-    return state.mode === 'edit' && state.sources.length > 1 && state.plan === 'reference';
-  }
-  function isEditEach() {
-    return state.mode === 'edit' && state.sources.length > 1 && state.plan === 'each';
-  }
-
   function estimate() {
-    var mode = state.mode;
-    var per = perImage(state.model, state.quality, currentResolution(), mode);
+    var m = mode();
+    var per = perImage(state.model, state.quality, currentResolution(), m);
     if (per == null) return null;
     var p = priceEntry(state.model);
     var input = p && typeof p.input === 'number' ? p.input : 0;
-    if (mode !== 'edit') {
-      return { total: per * state.frames, per: per, count: state.frames, input: 0 };
-    }
+    if (m !== 'edit') return { total: per * state.frames, per: per, count: state.frames };
     var sources = Math.max(1, state.sources.length);
-    if (isEditEach()) {
-      // One request per photo, each paying its own input charge.
-      return { total: (per + input) * sources, per: per, count: sources, input: input };
-    }
-    // One request per variant, and every request re-sends every source image,
-    // so the input charge is paid once per source per variant.
+    // One request per photo, each paying its own input charge.
+    if (isEditEach()) return { total: (per + input) * sources, per: per + input, count: sources };
+    // One request per variant, and every request re-sends every source image.
     var perRequest = per + input * sources;
-    return { total: perRequest * state.variants, per: per, count: state.variants, input: input * sources };
+    return { total: perRequest * state.variants, per: perRequest, count: state.variants };
   }
 
   // -------------------------------------------------------------------------
@@ -316,15 +309,40 @@
   function renderSpend() {
     spend = spend.date === todayStamp() ? spend : { date: todayStamp(), amount: 0, runs: 0 };
     spendAmount.textContent = money(spend.amount);
-    if (spend.runs > 0) {
-      spendRuns.hidden = false;
-      spendRuns.textContent = '· ' + spend.runs + (spend.runs === 1 ? ' run' : ' runs');
-    } else {
-      spendRuns.hidden = true;
+    spendRuns.hidden = !(spend.runs > 0);
+    if (spend.runs > 0) spendRuns.textContent = '· ' + spend.runs + (spend.runs === 1 ? ' run' : ' runs');
+  }
+
+  // What is left of the prepaid credit, read by the server from xAI's
+  // Management API. Shown only when the server has the key for it; when it has
+  // not, or xAI is not answering, the element stays hidden and nothing is
+  // implied about the balance.
+  var LOW_BALANCE = 5;
+  async function refreshBalance() {
+    if (!config || app.hidden) return;
+    try {
+      var res = await fetch('/api/balance', { headers: authHeaders({}) });
+      if (!res.ok) { balanceEl.hidden = true; return; }
+      var b = await res.json();
+      if (!b || !b.available) { balanceEl.hidden = true; return; }
+      balanceEl.hidden = false;
+      balanceEl.innerHTML = '';
+      balanceEl.appendChild(document.createTextNode('· '));
+      // A tilde when this billing cycle's spend could not be read: the true
+      // figure may be lower.
+      balanceEl.appendChild(el('b', null, (b.exact ? '' : '≈') + money(b.remaining)));
+      balanceEl.appendChild(document.createTextNode(' left'));
+      balanceEl.classList.toggle('is-low', b.remaining < LOW_BALANCE);
+      balanceEl.title = 'Prepaid credit left on the xAI account' +
+        (b.cycleSpend != null ? ' — ' + money(b.ledger) + ' on the ledger, less ' + money(b.cycleSpend) + ' used this billing cycle.' : '.') +
+        (b.exact ? '' : ' This cycle’s spend could not be read, so the real figure may be lower.') +
+        ' Refreshed about once a minute.';
+    } catch (err) {
+      balanceEl.hidden = true;
     }
   }
 
-  // Spend increments only on a completed run, never on a failure.
+  // Spend increments only when an image arrives, never on a failure.
   function addSpend(amount, isNewRun) {
     if (typeof amount !== 'number' || !isFinite(amount)) return;
     spend.amount = Math.round((spend.amount + amount) * 1e6) / 1e6;
@@ -334,7 +352,7 @@
   }
 
   // -------------------------------------------------------------------------
-  // 09 Retirement. Computed from the local date against the model's retirement
+  // Retirement. Computed from the local date against the model's retirement
   // instant and re-read on load and on window focus — never hardcoded.
   // -------------------------------------------------------------------------
   function retirementFor(model) {
@@ -342,15 +360,13 @@
     if (!p || !p.retiresAt) return null;
     var at = Date.parse(p.retiresAt);
     if (isNaN(at)) return null;
-    var now = Date.now();
-    var msLeft = at - now;
+    var msLeft = at - Date.now();
     var successor = null;
     var prices = config.prices;
     for (var id in prices) {
       if (id !== model && !prices[id].retiresAt) { successor = prices[id]; break; }
     }
     return {
-      at: at,
       msLeft: msLeft,
       retired: msLeft <= 0,
       hours: Math.max(0, Math.ceil(msLeft / 3600000)),
@@ -361,6 +377,11 @@
     };
   }
 
+  function modelIsRetired(model) {
+    var r = retirementFor(model);
+    return Boolean(r && r.retired);
+  }
+
   function renderRetirement() {
     retirementEl.innerHTML = '';
     // The retired model cannot be selected, so its notice is shown against
@@ -368,36 +389,37 @@
     var r = retirementFor(state.model) || (retiredFallback ? retirementFor(retiredFallback) : null);
     if (!r) { retirementEl.hidden = true; return; }
     retirementEl.hidden = false;
-
     var box = el('div', 'notice ' + (r.retired ? 'notice--danger' : 'notice--warning'));
-    var title = el('div', 'notice__title num');
-    var body = el('div', 'notice__body');
-
+    var title, body;
     if (r.retired) {
-      title.textContent = 'Retired on ' + r.dateLabel;
-      body.textContent = r.label + ' no longer accepts requests. Pick ' + r.successor +
-        ' to generate. Existing images stay downloadable.';
+      title = r.label + ' retired on ' + r.dateLabel;
+      body = 'It no longer accepts requests, so ' + r.successor + ' is selected. Existing images stay downloadable.';
     } else if (r.msLeft <= 48 * 3600000) {
-      title.textContent = 'Retires in ' + r.hours + (r.hours === 1 ? ' hour' : ' hours');
-      body.textContent = r.label + ' stops working today at midnight UTC. Anything queued after that fails. Switch to ' + r.successor + '.';
+      title = r.label + ' retires in ' + r.hours + (r.hours === 1 ? ' hour' : ' hours');
+      body = 'It stops working at midnight UTC. Anything queued after that fails. Switch to ' + r.successor + '.';
     } else {
-      title.textContent = 'Retires in ' + r.days + ' days';
-      body.textContent = r.label + ' stops working on ' + r.dateLabel + '. Switch to ' + r.successor +
+      title = r.label + ' retires in ' + r.days + ' days';
+      body = 'It stops working on ' + r.dateLabel + '. Switch to ' + r.successor +
         ' for new work — different look, so re-check anything you have already approved.';
     }
-    box.appendChild(title);
-    box.appendChild(body);
+    box.appendChild(el('div', 'notice__title num', title));
+    box.appendChild(el('div', 'notice__body', body));
     retirementEl.appendChild(box);
   }
 
-  function modelIsRetired(model) {
-    var r = retirementFor(model);
-    return Boolean(r && r.retired);
+  // -------------------------------------------------------------------------
+  // The pills. Each is a real <select> lying invisibly over a label that shows
+  // the current value, so the options can carry detail (prices, pixel sizes)
+  // while the pill itself stays short.
+  // -------------------------------------------------------------------------
+  function option(value, text, disabled) {
+    var opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    if (disabled) opt.disabled = true;
+    return opt;
   }
 
-  // -------------------------------------------------------------------------
-  // Rail rendering
-  // -------------------------------------------------------------------------
   function buildModelOptions() {
     var prices = config.prices || {};
     var ids = Object.keys(prices);
@@ -409,359 +431,308 @@
     modelEl.innerHTML = '';
     live.concat(dead).forEach(function (id) {
       var p = prices[id];
-      var opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = p.label + (modelIsRetired(id) ? ' — retired' : '');
-      opt.disabled = modelIsRetired(id);
-      modelEl.appendChild(opt);
+      var retired = modelIsRetired(id);
+      modelEl.appendChild(option(id, p.label + (retired ? ' — retired' : p.isDefault ? ' — default' : ''), retired));
     });
 
     if (!prices[state.model] || modelIsRetired(state.model)) {
       // Moving someone off a model they had chosen is not something to do
-      // silently — remember it so the notice can explain why their images will
-      // look different from the ones they already approved.
+      // silently — remember it so the notice can explain why.
       if (prices[state.model] && modelIsRetired(state.model)) retiredFallback = state.model;
-      var fallback = live.filter(function (id) { return prices[id].isDefault; })[0] || live[0] || ids[0];
-      state.model = fallback;
+      state.model = live.filter(function (id) { return prices[id].isDefault; })[0] || live[0] || ids[0];
     }
     modelEl.value = state.model;
-
-    var chosen = prices[state.model];
-    if (chosen && chosen.isDefault) {
-      modelNote.hidden = false;
-      modelNote.textContent = 'default';
-    } else {
-      modelNote.hidden = true;
-    }
   }
 
-  function buildShapeOptions() {
+  function renderPills() {
+    var m = mode();
+    var p = priceEntry(state.model);
+    modelText.textContent = p ? p.label : state.model;
+
+    // Shape. On an edit, auto means the shape of the first photo — say so,
+    // because that is the one case where "auto" is a specific answer.
+    var shape = currentShape();
     shapeEl.innerHTML = '';
     SHAPES.forEach(function (s) {
-      var opt = document.createElement('option');
-      opt.value = s.value;
-      // On an edit, auto means the shape of the first photo — say so, because
-      // that is the one case where "auto" is a specific, predictable answer.
-      opt.textContent = s.value === 'auto' && state.mode === 'edit' ? 'Same as the base photo' : s.label;
-      shapeEl.appendChild(opt);
+      shapeEl.appendChild(option(s, s === 'auto' ? (m === 'edit' ? 'Same as the base photo' : 'Auto — the model chooses') : s));
     });
-    shapeEl.value = currentShape();
-  }
+    shapeEl.value = shape;
+    shapeText.textContent = shape === 'auto' ? (m === 'edit' ? 'As base' : 'Auto') : shape;
+    var parts = shape === 'auto' ? [1, 1] : shape.split(':').map(Number);
+    var long = 14, w = parts[0] >= parts[1] ? long : Math.max(5, Math.round(long * parts[0] / parts[1])),
+        h = parts[1] >= parts[0] ? long : Math.max(5, Math.round(long * parts[1] / parts[0]));
+    shapeIcon.style.width = w + 'px';
+    shapeIcon.style.height = h + 'px';
+    shapeIcon.style.borderStyle = shape === 'auto' ? 'dashed' : 'solid';
 
-  // Sizes are relabelled when the shape changes; both resolutions stay available,
-  // so the chosen one is kept rather than silently reset to the dearer option.
-  function buildSizeOptions() {
+    // Size.
+    var res = currentResolution();
     sizeEl.innerHTML = '';
     RESOLUTIONS.forEach(function (r) {
-      var opt = document.createElement('option');
-      opt.value = r;
-      opt.textContent = sizeLabel(currentShape(), r);
-      sizeEl.appendChild(opt);
+      sizeEl.appendChild(option(r, r.toUpperCase() + ' · ' + sizeLabel(shape, r)));
     });
-    sizeEl.value = currentResolution();
-  }
+    sizeEl.value = res;
+    sizeText.textContent = res.toUpperCase();
+    // 1k was the weakest transfer of the resolutions tried.
+    sizePill.classList.toggle('is-warning', isReference() && res === '1k');
 
-  // The design shows the open list with a price on every row, so you compare
-  // while choosing rather than one selection at a time. A native select keeps the
-  // keyboard and screen-reader behaviour, so the prices go into the option text.
-  function buildQualityOptions() {
-    var p = priceEntry(state.model);
-    if (!p || !p.tiers || p.tiers['default']) return;
-
-    var keys = ['auto'].concat(Object.keys(p.tiers));
-    if (keys.indexOf(state.quality) === -1) state.quality = 'auto';
-
-    qualityEl.innerHTML = '';
-    keys.forEach(function (q) {
-      var per = perImage(state.model, q, currentResolution(), state.mode);
-      var label = q.charAt(0).toUpperCase() + q.slice(1);
-      var opt = document.createElement('option');
-      opt.value = q;
-      opt.textContent = per == null
-        ? label
-        : label + ' — ' + money(per) + (state.mode === 'edit' ? '' : ' a frame');
-      qualityEl.appendChild(opt);
-    });
-    qualityEl.value = state.quality;
-  }
-
-  function renderQuality() {
-    // Only grok-imagine-image-2.0 accepts quality; sending it to any other model
-    // is a 400, so the control is absent rather than present-and-broken.
-    if (!acceptsQuality(state.model)) {
-      qualityField.hidden = true;
-      return;
+    // Quality — only for models that accept it; sending it to any other is a 400.
+    var tiers = p && p.tiers && !p.tiers['default'] ? Object.keys(p.tiers) : null;
+    qualityField.hidden = !(acceptsQuality(state.model) && tiers);
+    if (!qualityField.hidden) {
+      var keys = ['auto'].concat(tiers);
+      if (keys.indexOf(state.quality) === -1) state.quality = 'auto';
+      qualityEl.innerHTML = '';
+      keys.forEach(function (q) {
+        var per = perImage(state.model, q, res, m);
+        var label = q.charAt(0).toUpperCase() + q.slice(1);
+        qualityEl.appendChild(option(q, per == null ? label : label + ' — ' + money(per) + ' an image'));
+      });
+      qualityEl.value = state.quality;
+      qualityText.textContent = state.quality.charAt(0).toUpperCase() + state.quality.slice(1) + ' quality';
     }
-    qualityField.hidden = false;
-    // Rebuilt on every settings change: the price on each row depends on the
-    // model, the size and whether this is a generation or an edit.
-    buildQualityOptions();
 
-    var per = perImage(state.model, state.quality, currentResolution(), state.mode);
-    if (per == null) {
-      qualityNote.textContent = '';
-      return;
-    }
-    qualityNote.textContent = state.mode === 'edit' ? money(per) : money(per) + ' a frame';
+    // Frames on a generation, variants on an edit. Absent when several photos
+    // are edited apart — that is one image per photo.
+    framesField.hidden = isEditEach();
+    var count = currentCount();
+    var word = m === 'edit' ? 'variant' : 'frame';
+    framesLabel.textContent = m === 'edit' ? 'Variants' : 'Frames';
+    framesValue.textContent = count + ' ' + word + (count === 1 ? '' : 's');
+    framesMinus.disabled = busy || count <= 1;
+    framesPlus.disabled = busy || count >= maxCount();
+    framesMinus.setAttribute('aria-label', 'Fewer ' + word + 's');
+    framesPlus.setAttribute('aria-label', 'More ' + word + 's');
   }
 
-  function renderModeChrome() {
-    var mode = state.mode;
-    var editing = mode === 'edit';
-    var count = state.sources.length;
-    var reference = isReference();
-    var each = isEditEach();
-
-    [[tabGenerate, 'generate'], [tabEdit, 'edit']].forEach(function (pair) {
-      var on = pair[1] === mode;
-      pair[0].setAttribute('aria-selected', String(on));
-      pair[0].tabIndex = on ? 0 : -1;
-    });
-
-    sourceField.hidden = !editing;
-    // Shape and size are sent on edits too now — the output otherwise follows
-    // the first photo, which is not what was chosen. Editing each of several
-    // photos is the one case with no count control: one image per photo.
-    shapeSize.hidden = false;
-    framesField.hidden = each;
-    framesLabel.textContent = editing ? 'Variants' : 'Frames';
-    framesEl.max = maxCount();
-    framesMax.textContent = String(maxCount());
-    // Measured: four variants of one edit differed only in individual curls.
-    framesHint.hidden = !editing;
-    framesHint.textContent = editing
-      ? 'Variants of an edit come back very similar. If a result is wrong, change the prompt or the crop instead.'
-      : '';
-
-    sourceLabel.textContent = reference ? 'Photos to combine' : 'Photos to edit';
-
-    // Two or more photos is ambiguous — one image out, or one per photo — and
-    // the page cannot guess, so it asks.
-    planField.hidden = !(editing && count > 1);
-    planReference.setAttribute('aria-checked', String(state.plan === 'reference'));
-    planEach.setAttribute('aria-checked', String(state.plan === 'each'));
-    planReference.tabIndex = state.plan === 'reference' ? 0 : -1;
-    planEach.tabIndex = state.plan === 'each' ? 0 : -1;
-    planHint.textContent = state.plan === 'reference'
-      ? 'One image out. The first photo is the base; the others lend only what the prompt asks for.'
-      : 'The same change applied to every photo — ' + count + ' images out, one per photo.';
-
-    sourceHint.hidden = !reference;
-    sourceHint.textContent = 'Everything is kept from the base — pose, clothing, background, framing, light. ' +
-      'The other photos contribute only what the prompt asks for. The order is the result: ' +
-      'drag a row, or use its arrows, to change which photo is the base.';
-
-    // Asked once a session, before the first reference edit.
-    consentField.hidden = !reference || likenessConsent;
-    consentBox.checked = likenessConsent;
-
-    // 1k was the weakest transfer of the four resolutions tried. Say so rather
-    // than let a cheaper default quietly cost the likeness.
-    var low = reference && currentResolution() === '1k';
-    sizeHint.hidden = !low;
-    sizeHint.textContent = low
-      ? '1k kept the least of the likeness in testing. 2k costs a little more and holds the face noticeably better.'
-      : '';
-
-    promptLabel.textContent = reference
-      ? 'What should it take from them?'
-      : editing ? 'What should change?' : 'What should it make?';
-    promptEl.placeholder = reference
-      ? 'Say what to take — “replace the head with the person in photo 2, keep everything else”'
-      : editing
-        ? 'Describe the change — “make the background a plain warm grey”'
-        : 'Describe the image — subject, setting, light, mood';
-    promptEl.classList.toggle('textarea--edit', editing);
-    promptEl.classList.toggle('textarea--generate', !editing);
-
-    promptGuidance.textContent = reference
-      ? 'Name photos by number. Photo 1 is the base and stays as it is unless you say otherwise.'
-      : editing
-        ? (count > 1
-            ? 'The same change is applied to each photo, one image back per photo.'
-            : 'An edit returns one image. Raise Variants to get several attempts in one run.')
-        : 'Plain description works better than keywords.';
-  }
-
-  // The dropzone stays put so more photos can be added; loaded ones list below
-  // it, in sending order. With two or more photos in a reference edit the first
-  // carries a Base badge, and every row can be moved by drag or by its arrows.
-  var cropOpen = -1;   // index of the photo whose crop panel is open, or -1
-  var dragFrom = -1;   // index of the row being dragged, or -1
-
+  // -------------------------------------------------------------------------
+  // Photo chips
+  // -------------------------------------------------------------------------
   function dimsText(src) {
-    if (src.crop) {
-      return 'Cropped ' + src.crop.w + '×' + src.crop.h + ' → ' + src.crop.outW + '×' + src.crop.outH +
-        ' · ' + bytes(src.size);
+    if (src.crop) return 'cropped to ' + src.crop.w + '×' + src.crop.h + ', sent at ' + src.crop.outW + '×' + src.crop.outH;
+    return (src.width ? src.width + '×' + src.height + ' · ' : '') + bytes(src.size);
+  }
+
+  function chipLabel(i) {
+    if (isReference()) return i === 0 ? 'Base' : String(i + 1);
+    return state.sources.length > 1 ? String(i + 1) : '';
+  }
+
+  function closeChipPanel(refocus) {
+    var was = openChip;
+    openChip = -1;
+    chipView = 'menu';
+    renderChipPanel();
+    renderSource();
+    if (refocus && was >= 0) {
+      var btn = sourceList.querySelectorAll('.chip__thumb')[Math.min(was, state.sources.length - 1)];
+      (btn || addBtn).focus();
     }
-    return src.width ? src.width + '×' + src.height + ' · ' + bytes(src.size) : bytes(src.size);
   }
 
   function moveSource(from, to) {
     if (to < 0 || to >= state.sources.length || from === to) return;
     var item = state.sources.splice(from, 1)[0];
     state.sources.splice(to, 0, item);
-    if (cropOpen === from) cropOpen = to;
-    else if (cropOpen !== -1 && from < cropOpen && to >= cropOpen) cropOpen -= 1;
-    else if (cropOpen !== -1 && from > cropOpen && to <= cropOpen) cropOpen += 1;
+    if (openChip === from) openChip = to;
+    else if (openChip !== -1) openChip = -1;
+    // Only the base may stay uncropped-by-rule; a crop made on a reference is
+    // still a valid crop if it becomes the base, so it is left alone.
     renderRail();
   }
 
-  function orderButton(i, delta) {
-    var count = state.sources.length;
-    var b = el('button', 'btn-text source__order', delta < 0 ? '↑' : '↓');
-    b.type = 'button';
-    b.setAttribute('aria-label', 'Move photo ' + (i + 1) + (delta < 0 ? ' up' : ' down'));
-    b.disabled = busy || (delta < 0 ? i === 0 : i === count - 1);
-    b.addEventListener('click', function () {
-      var to = i + delta;
-      moveSource(i, to);
-      // Keep the keyboard where it was: on the same arrow of the moved row.
-      var rows = sourceList.querySelectorAll('.source');
-      var row = rows[to];
-      var next = row && row.querySelector(delta < 0 ? '[aria-label$=" up"]' : '[aria-label$=" down"]');
-      if (next && !next.disabled) next.focus();
-      else if (row) (row.querySelector('button:not(:disabled)') || dropzone).focus();
-    });
-    return b;
+  function removeSource(i) {
+    state.sources.splice(i, 1);
+    openChip = -1;
+    chipView = 'menu';
+    clearError();
+    renderRail();
+    var next = sourceList.querySelectorAll('.chip__thumb')[Math.min(i, state.sources.length - 1)];
+    (next || addBtn).focus();
   }
 
-  function wireDrag(row, i) {
-    row.addEventListener('dragstart', function (e) {
+  function renderSource() {
+    sourceList.innerHTML = '';
+    var count = state.sources.length;
+    rail.classList.toggle('has-photos', count > 0);
+
+    state.sources.forEach(function (src, i) {
+      var isBase = isReference() && i === 0;
+      var chip = el('div', 'chip' + (isBase ? ' chip--base' : ''));
+      chip.setAttribute('role', 'listitem');
+      chip.draggable = !busy && count > 1;
+
+      var thumb = el('button', 'chip__thumb');
+      thumb.type = 'button';
+      thumb.disabled = busy;
+      thumb.setAttribute('aria-expanded', String(openChip === i));
+      thumb.setAttribute('aria-label', (isBase ? 'Base photo' : 'Photo ' + (i + 1)) + ': ' + src.name + '. Open its options.');
+      thumb.title = src.name;
+      var img = document.createElement('img');
+      img.src = src.dataUri;
+      img.alt = '';
+      img.draggable = false;
+      thumb.appendChild(img);
+      thumb.addEventListener('click', function () {
+        openChip = openChip === i ? -1 : i;
+        chipView = 'menu';
+        closeMention();
+        renderSource();
+        renderChipPanel();
+        var first = chipPanel.querySelector('button');
+        if (openChip === i && first) first.focus();
+      });
+      // Alt + arrows reorder from the keyboard without opening anything.
+      thumb.addEventListener('keydown', function (e) {
+        if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+        e.preventDefault();
+        var to = i + (e.key === 'ArrowRight' ? 1 : -1);
+        if (to < 0 || to >= count) return;
+        moveSource(i, to);
+        var moved = sourceList.querySelectorAll('.chip__thumb')[to];
+        if (moved) moved.focus();
+      });
+      chip.appendChild(thumb);
+
+      var label = chipLabel(i);
+      if (label) chip.appendChild(el('span', 'chip__badge', label));
+      if (src.crop) {
+        var mark = el('span', 'chip__crop');
+        mark.title = 'Cropped';
+        mark.appendChild(icon('crop', 9));
+        chip.appendChild(mark);
+      }
+
+      var remove = el('button', 'chip__remove');
+      remove.type = 'button';
+      remove.disabled = busy;
+      remove.setAttribute('aria-label', 'Remove ' + src.name);
+      remove.appendChild(icon('x', 10));
+      remove.addEventListener('click', function () { removeSource(i); });
+      chip.appendChild(remove);
+
+      if (count > 1) wireChipDrag(chip, i);
+      sourceList.appendChild(chip);
+    });
+
+    addBtn.disabled = busy || count >= MAX_SOURCES;
+    addBtn.setAttribute('aria-label', count ? 'Add another photo' : 'Add photos');
+
+    // Two or more photos is ambiguous — one image out, or one per photo — and
+    // the page cannot guess, so it asks.
+    planSwitch.hidden = count < 2;
+    planReference.setAttribute('aria-checked', String(state.plan === 'reference'));
+    planEach.setAttribute('aria-checked', String(state.plan === 'each'));
+    planReference.tabIndex = state.plan === 'reference' ? 0 : -1;
+    planEach.tabIndex = state.plan === 'each' ? 0 : -1;
+    planReference.disabled = planEach.disabled = busy;
+  }
+
+  function wireChipDrag(chip, i) {
+    chip.addEventListener('dragstart', function (e) {
       if (busy) { e.preventDefault(); return; }
       dragFrom = i;
-      row.classList.add('is-dragging');
+      chip.classList.add('is-dragging');
       try { e.dataTransfer.setData('text/plain', String(i)); } catch (err) { /* older engines */ }
       e.dataTransfer.effectAllowed = 'move';
     });
-    row.addEventListener('dragover', function (e) {
+    chip.addEventListener('dragover', function (e) {
       if (dragFrom === -1) return;
       e.preventDefault();
+      e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
-      var r = row.getBoundingClientRect();
-      var below = e.clientY > r.top + r.height / 2;
-      row.classList.toggle('is-target-before', !below);
-      row.classList.toggle('is-target-after', below);
+      var r = chip.getBoundingClientRect();
+      var after = e.clientX > r.left + r.width / 2;
+      chip.classList.toggle('is-target-before', !after);
+      chip.classList.toggle('is-target-after', after);
     });
-    row.addEventListener('dragleave', function () {
-      row.classList.remove('is-target-before', 'is-target-after');
+    chip.addEventListener('dragleave', function () {
+      chip.classList.remove('is-target-before', 'is-target-after');
     });
-    row.addEventListener('drop', function (e) {
+    chip.addEventListener('drop', function (e) {
       if (dragFrom === -1) return;
       e.preventDefault();
-      var r = row.getBoundingClientRect();
-      var below = e.clientY > r.top + r.height / 2;
-      var to = i + (below ? 1 : 0);
+      e.stopPropagation();
+      var r = chip.getBoundingClientRect();
+      var to = i + (e.clientX > r.left + r.width / 2 ? 1 : 0);
       if (dragFrom < to) to -= 1;
       var from = dragFrom;
       dragFrom = -1;
       moveSource(from, to);
     });
-    row.addEventListener('dragend', function () {
+    chip.addEventListener('dragend', function () {
       dragFrom = -1;
-      Array.prototype.slice.call(sourceList.querySelectorAll('.source')).forEach(function (n) {
+      Array.prototype.slice.call(sourceList.querySelectorAll('.chip')).forEach(function (n) {
         n.classList.remove('is-dragging', 'is-target-before', 'is-target-after');
       });
     });
   }
 
-  function renderSource() {
-    sourceList.innerHTML = '';
+  function panelButton(text, fn, danger) {
+    var b = el('button', 'btn-quiet', text);
+    b.type = 'button';
+    if (danger) b.style.color = 'var(--danger)';
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function renderChipPanel() {
+    chipPanel.innerHTML = '';
+    var i = openChip;
+    var src = state.sources[i];
+    if (i < 0 || !src || busy) { chipPanel.hidden = true; openChip = -1; return; }
+    chipPanel.hidden = false;
+
     var reference = isReference();
+    var isBase = reference && i === 0;
     var count = state.sources.length;
 
-    state.sources.forEach(function (src, i) {
-      var isBase = reference && i === 0;
-      var row = el('div', 'source' + (isBase ? ' source--base' : ''));
-      row.draggable = !busy && count > 1;
+    var head = el('div', 'panel__head');
+    var title = el('div', 'panel__title', (isBase ? 'Base · ' : count > 1 ? 'Photo ' + (i + 1) + ' · ' : '') + src.name);
+    title.appendChild(el('span', 'panel__sub num', dimsText(src)));
+    head.appendChild(title);
+    var close = el('button', 'icon-btn');
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close');
+    close.appendChild(icon('x', 14));
+    close.addEventListener('click', function () { closeChipPanel(true); });
+    head.appendChild(close);
+    chipPanel.appendChild(head);
 
-      if (count > 1) {
-        var grip = el('span', 'source__grip');
-        grip.setAttribute('aria-hidden', 'true');
-        grip.title = 'Drag to reorder';
-        row.appendChild(grip);
-      }
-
-      var thumb = document.createElement('img');
-      thumb.className = 'source__thumb';
-      thumb.src = src.dataUri;
-      thumb.alt = (isBase ? 'Base photo: ' : reference ? 'Photo ' + (i + 1) + ': ' : 'Photo to edit: ') + src.name;
-      thumb.draggable = false;
-      row.appendChild(thumb);
-
-      var meta = el('div', 'source__meta');
-      var nameLine = el('div', 'source__name');
-      if (reference) {
-        nameLine.appendChild(el('span', 'source__badge' + (isBase ? ' source__badge--base' : ''),
-          isBase ? 'Base' : 'Photo ' + (i + 1)));
-      } else if (count > 1) {
-        nameLine.appendChild(el('span', 'source__badge', String(i + 1)));
-      }
-      nameLine.appendChild(el('span', 'source__file', src.name));
-      meta.appendChild(nameLine);
-      meta.appendChild(el('div', 'source__dims num', dimsText(src)));
-
-      var tools = el('div', 'source__tools');
-      if (count > 1) {
-        tools.appendChild(orderButton(i, -1));
-        tools.appendChild(orderButton(i, +1));
-      }
-      // A reference contributes a face, a garment, a room; the tighter the crop
-      // the less of the rest comes with it. The base is never cropped — it is
-      // the picture being kept.
-      if (reference && !isBase) {
-        var cropBtn = el('button', 'btn-text', cropOpen === i ? 'Close crop' : (src.crop ? 'Recrop' : 'Crop'));
-        cropBtn.type = 'button';
-        cropBtn.disabled = busy;
-        cropBtn.setAttribute('aria-expanded', String(cropOpen === i));
-        cropBtn.addEventListener('click', function () {
-          cropOpen = cropOpen === i ? -1 : i;
-          renderSource();
-          var panel = sourceList.querySelector('.cropper__stage');
-          if (panel) panel.focus();
-        });
-        tools.appendChild(cropBtn);
-        if (src.crop) {
-          var uncrop = el('button', 'btn-text', 'Use whole photo');
-          uncrop.type = 'button';
-          uncrop.disabled = busy;
-          uncrop.addEventListener('click', function () { clearCrop(src); renderRail(); });
-          tools.appendChild(uncrop);
-        }
-      }
-      var remove = el('button', 'btn-text btn-text--danger', 'Remove');
-      remove.type = 'button';
-      remove.setAttribute('aria-label', 'Remove ' + src.name);
-      remove.disabled = busy;
-      remove.addEventListener('click', function () {
-        state.sources.splice(i, 1);
-        if (cropOpen === i) cropOpen = -1;
-        else if (cropOpen > i) cropOpen -= 1;
-        resetDropzone();
-        renderRail();
-        (state.sources.length ? sourceList.querySelector('button:not(:disabled)') : dropzone).focus();
-      });
-      tools.appendChild(remove);
-      meta.appendChild(tools);
-      row.appendChild(meta);
-
-      if (count > 1) wireDrag(row, i);
-      sourceList.appendChild(row);
-
-      if (cropOpen === i && reference && !isBase) sourceList.appendChild(renderCropper(src, i));
-    });
-
-    dropzoneTitle.dataset.more = count ? '1' : '';
-    if (!dropzone.classList.contains('is-rejected') && !dropzone.classList.contains('is-over')) {
-      dropzoneTitle.textContent = count ? 'Drop more photos here' : 'Drop photos here';
+    if (chipView === 'crop') {
+      chipPanel.appendChild(renderCropper(src, i));
+      return;
     }
+
+    var actions = el('div', 'panel__actions');
+    if (reference && i > 0) actions.appendChild(panelButton('Make this the base', function () { moveSource(i, 0); closeChipPanel(true); }));
+    if (count > 1 && i > 0) actions.appendChild(panelButton('Move left', function () { moveSource(i, i - 1); focusPanel(); }));
+    if (count > 1 && i < count - 1) actions.appendChild(panelButton('Move right', function () { moveSource(i, i + 1); focusPanel(); }));
+    // The base is never cropped — it is the picture being kept.
+    if (!isBase) {
+      actions.appendChild(panelButton(src.crop ? 'Crop again' : 'Crop', function () {
+        chipView = 'crop';
+        renderChipPanel();
+        var stage = chipPanel.querySelector('.cropper__stage');
+        if (stage) stage.focus();
+      }));
+    }
+    if (src.crop) actions.appendChild(panelButton('Use the whole photo', function () { clearCrop(src); renderRail(); renderChipPanel(); }));
+    actions.appendChild(panelButton('Remove', function () { removeSource(i); }, true));
+    chipPanel.appendChild(actions);
+
+    chipPanel.appendChild(el('p', 'panel__note', isBase
+      ? 'Everything is kept from the base — pose, clothing, background, framing and light — unless the prompt says otherwise.'
+      : reference
+        ? 'This photo lends only what the prompt asks for. Crop it to just that part — a face, a garment — and it carries over more faithfully.'
+        : 'Crop to edit just part of the photo. Add another photo to combine them into one picture.'));
   }
 
   // -------------------------------------------------------------------------
-  // Cropping a reference. Drag a box on the photo; arrow keys nudge it, Shift
-  // with arrows resizes it, Enter applies, Escape closes. The crop is cut from
-  // the untouched original and upscaled with smoothing off, so nothing is
-  // blurred on the way in.
+  // Cropping. Drag a box on the photo; arrow keys nudge it, Shift with arrows
+  // resizes it, Enter applies, Escape closes. The crop is cut from the
+  // untouched original and upscaled with smoothing off, so nothing is blurred
+  // on the way in.
   // -------------------------------------------------------------------------
   function clearCrop(src) {
     if (!src.crop) return;
@@ -787,76 +758,71 @@
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(im, x, y, w, h, 0, 0, canvas.width, canvas.height);
         var out;
-        try {
-          out = canvas.toDataURL('image/jpeg', 0.95);
-        } catch (err) {
-          resolve(false);
-          return;
-        }
-        if (!src.original) { src.original = src.dataUri; src.originalSize = src.size; }
+        try { out = canvas.toDataURL('image/jpeg', 0.95); }
+        catch (err) { resolve(false); return; }
         src.dataUri = out;
         src.size = Math.round((out.length - out.indexOf(',') - 1) * 0.75);
-        src.crop = { x: x, y: y, w: w, h: h, outW: canvas.width, outH: canvas.height, scale: Math.round(scale * 100) / 100 };
+        src.crop = { x: x, y: y, w: w, h: h, outW: canvas.width, outH: canvas.height };
         resolve(true);
       };
       im.onerror = function () { resolve(false); };
-      im.src = src.original || src.dataUri;
+      im.src = src.original;
     });
   }
 
   function renderCropper(src, i) {
-    var panel = el('div', 'cropper');
+    var wrap = el('div', 'cropper');
     var stage = el('div', 'cropper__stage');
     stage.tabIndex = 0;
     stage.setAttribute('role', 'application');
-    stage.setAttribute('aria-label', 'Crop photo ' + (i + 1) + '. Drag to draw a box around the face. ' +
+    stage.setAttribute('aria-label', 'Crop photo ' + (i + 1) + '. Drag to draw a box. ' +
       'Arrow keys move the box, Shift with arrows resizes it, Enter applies, Escape closes.');
     var img = document.createElement('img');
     img.className = 'cropper__img';
-    img.src = src.original || src.dataUri;
+    img.src = src.original;
     img.alt = '';
     img.draggable = false;
     stage.appendChild(img);
     var box = el('div', 'cropper__box');
     box.hidden = true;
     stage.appendChild(box);
-    panel.appendChild(stage);
+    wrap.appendChild(stage);
 
-    var note = el('div', 'hint cropper__note');
-    panel.appendChild(note);
+    var note = el('div', 'cropper__note num');
+    wrap.appendChild(note);
 
     var actions = el('div', 'cropper__actions');
-    var apply = el('button', 'btn-quiet', 'Use this crop');
+    var apply = el('button', 'btn-primary', 'Use this crop');
     apply.type = 'button';
-    var cancel = el('button', 'btn-text', 'Close');
-    cancel.type = 'button';
+    var back = el('button', 'btn-quiet', 'Back');
+    back.type = 'button';
     actions.appendChild(apply);
-    actions.appendChild(cancel);
-    panel.appendChild(actions);
+    actions.appendChild(back);
+    wrap.appendChild(actions);
 
     // The box lives in the photo's own pixels; only painting converts to screen.
     var natW = src.width || 0, natH = src.height || 0;
     var rect = src.crop ? { x: src.crop.x, y: src.crop.y, w: src.crop.w, h: src.crop.h } : null;
 
-    function scale() { return img.clientWidth && natW ? img.clientWidth / natW : 1; }
+    function k() { return img.clientWidth && natW ? img.clientWidth / natW : 1; }
 
     function paint() {
       var has = Boolean(rect && rect.w >= 8 && rect.h >= 8);
       box.hidden = !has;
-      apply.disabled = !has || busy;
+      apply.disabled = !has;
       if (has) {
-        var k = scale();
-        box.style.left = (rect.x * k) + 'px';
-        box.style.top = (rect.y * k) + 'px';
-        box.style.width = (rect.w * k) + 'px';
-        box.style.height = (rect.h * k) + 'px';
-        var short = Math.min(Math.round(rect.w), Math.round(rect.h));
-        var up = Math.max(1, CROP_TARGET_SHORT / short);
+        var s = k();
+        // The image may be letterboxed inside the stage; offset to match.
+        var ox = img.offsetLeft, oy = img.offsetTop;
+        box.style.left = (ox + rect.x * s) + 'px';
+        box.style.top = (oy + rect.y * s) + 'px';
+        box.style.width = (rect.w * s) + 'px';
+        box.style.height = (rect.h * s) + 'px';
+        var up = Math.max(1, CROP_TARGET_SHORT / Math.min(Math.round(rect.w), Math.round(rect.h)));
         note.textContent = Math.round(rect.w) + '×' + Math.round(rect.h) + ' px' +
-          (up > 1 ? ', sharpened up ' + (Math.round(up * 10) / 10) + '× on send' : ', sent as is') +
-          '. Head and shoulders, nothing else, worked best.';
+          (up > 1 ? ', sharpened up ' + (Math.round(up * 10) / 10) + '× when sent.' : ', sent as it is.');
       } else {
-        note.textContent = 'Drag a box around the face — head and shoulders, nothing else. A tight crop transferred better in testing.';
+        note.textContent = 'Drag a box around just the part you want — for a face, head and shoulders and nothing else.';
       }
     }
 
@@ -870,24 +836,22 @@
 
     function toImage(e) {
       var r = img.getBoundingClientRect();
-      var k = scale();
+      var s = k();
       return {
-        x: Math.max(0, Math.min(natW, (e.clientX - r.left) / k)),
-        y: Math.max(0, Math.min(natH, (e.clientY - r.top) / k))
+        x: Math.max(0, Math.min(natW, (e.clientX - r.left) / s)),
+        y: Math.max(0, Math.min(natH, (e.clientY - r.top) / s))
       };
     }
 
     // Pointer: press inside the box to move it, anywhere else to draw a new one.
     var gesture = null;
     stage.addEventListener('pointerdown', function (e) {
-      if (busy || e.button !== 0 || !natW) return;
+      if (e.button !== 0 || !natW) return;
       e.preventDefault();
       stage.focus();
       var p = toImage(e);
       var inside = rect && p.x >= rect.x && p.x <= rect.x + rect.w && p.y >= rect.y && p.y <= rect.y + rect.h;
-      gesture = inside
-        ? { kind: 'move', px: p.x, py: p.y, ox: rect.x, oy: rect.y }
-        : { kind: 'draw', px: p.x, py: p.y };
+      gesture = inside ? { kind: 'move', px: p.x, py: p.y, ox: rect.x, oy: rect.y } : { kind: 'draw', px: p.x, py: p.y };
       if (!inside) rect = { x: p.x, y: p.y, w: 0, h: 0 };
       try { stage.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
     });
@@ -898,10 +862,8 @@
         rect.x = gesture.ox + (p.x - gesture.px);
         rect.y = gesture.oy + (p.y - gesture.py);
       } else {
-        rect = {
-          x: Math.min(gesture.px, p.x), y: Math.min(gesture.py, p.y),
-          w: Math.abs(p.x - gesture.px), h: Math.abs(p.y - gesture.py)
-        };
+        rect = { x: Math.min(gesture.px, p.x), y: Math.min(gesture.py, p.y),
+                 w: Math.abs(p.x - gesture.px), h: Math.abs(p.y - gesture.py) };
       }
       clamp();
       paint();
@@ -911,7 +873,7 @@
     stage.addEventListener('pointercancel', endGesture);
 
     stage.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { e.preventDefault(); cropOpen = -1; renderSource(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); chipView = 'menu'; renderChipPanel(); focusPanel(); return; }
       if (e.key === 'Enter') { e.preventDefault(); if (!apply.disabled) apply.click(); return; }
       var dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
       var dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
@@ -920,7 +882,7 @@
       var step = Math.max(1, Math.round(natW / 100));
       if (!rect) {
         // Start from a centred box a third of the photo wide.
-        var w0 = Math.round(natW / 3), h0 = Math.round(w0 * 1.15);
+        var w0 = Math.round(natW / 3), h0 = Math.min(natH, Math.round(w0 * 1.15));
         rect = { x: Math.round((natW - w0) / 2), y: Math.round((natH - h0) / 2), w: w0, h: h0 };
       } else if (e.shiftKey) {
         rect.w += dx * step;
@@ -934,192 +896,160 @@
     });
 
     apply.addEventListener('click', function () {
-      if (!rect || busy) return;
+      if (!rect) return;
       apply.disabled = true;
       apply.textContent = 'Cropping';
       applyCrop(src, rect).then(function (ok) {
-        cropOpen = -1;
+        chipView = 'menu';
         renderRail();
+        renderChipPanel();
+        focusPanel();
         if (!ok) {
           showError('That crop could not be made',
             'The photo did not draw onto a canvas — it may be damaged. Try exporting it again.', 'danger');
         }
-        var row = sourceList.querySelectorAll('.source')[i];
-        var back = row && row.querySelector('button:not(:disabled)');
-        if (back) back.focus();
       });
     });
-    cancel.addEventListener('click', function () {
-      cropOpen = -1;
-      renderSource();
-      var row = sourceList.querySelectorAll('.source')[i];
-      var back = row && row.querySelector('button:not(:disabled)');
-      if (back) back.focus();
+    back.addEventListener('click', function () { chipView = 'menu'; renderChipPanel(); focusPanel(); });
+
+    img.addEventListener('load', function () {
+      if (!natW) { natW = img.naturalWidth; natH = img.naturalHeight; src.width = natW; src.height = natH; }
+      paint();
     });
-
-    img.addEventListener('load', paint);
-    if (!natW) {
-      img.addEventListener('load', function () { natW = img.naturalWidth; natH = img.naturalHeight; paint(); });
-    }
     paint();
-    return panel;
+    return wrap;
   }
 
-  function resetDropzone() {
-    dropzone.classList.remove('is-rejected', 'is-over');
-    dropzoneTitle.textContent = state.sources.length ? 'Drop more photos here' : 'Drop photos here';
-    dropzoneBody.innerHTML = 'Or <span class="dropzone__link">choose files</span>. JPG, PNG or WebP, up to 10 MB each.';
-  }
-
-  function rejectDrop(title, body) {
-    dropzone.classList.remove('is-over');
-    dropzone.classList.add('is-rejected');
-    dropzoneTitle.textContent = title;
-    dropzoneBody.textContent = body;
+  function focusPanel() {
+    var first = chipPanel.querySelector('button:not(:disabled)');
+    if (first) first.focus();
   }
 
   // -------------------------------------------------------------------------
-  // The action button: label, enabled state, reason, cost line
+  // The one line of guidance, the button, the cost
   // -------------------------------------------------------------------------
-  function actionLabel() {
-    if (state.mode === 'edit') {
-      var photos = state.sources.length;
-      var v = state.variants;
-      if (isEditEach()) return 'Apply edit to ' + photos + ' photos';
-      if (isReference()) return v > 1 ? 'Combine into ' + v + ' variants' : 'Combine into one';
-      return v > 1 ? 'Apply edit, ' + v + ' variants' : 'Apply edit';
-    }
-    return state.frames > 1 ? 'Generate ' + state.frames + ' frames' : 'Generate';
-  }
-
   function blockingReason() {
     if (!config) return 'Loading the studio.';
-    if (!config.hasKey) return null; // handled as a full error notice
     if (modelIsRetired(state.model)) return 'Pick a model that still accepts requests.';
-    if (state.mode === 'edit' && !state.sources.length) {
-      return wordCount(promptEl.value) >= 3
-        ? 'Add a photo to edit.'
-        : 'Add a photo and describe the change.';
-    }
     if (isReference() && state.sources.length > MAX_EDIT_SOURCES) {
       var extra = state.sources.length - MAX_EDIT_SOURCES;
       return 'Combining takes up to ' + MAX_EDIT_SOURCES + ' photos. Remove ' + extra +
         (extra === 1 ? '' : ' of them') + ', or switch to Edit each.';
     }
     if (!promptEl.value.trim()) {
-      return isReference()
-        ? 'Say what to take from the other photos.'
-        : state.mode === 'edit'
-          ? 'Describe the change you want.'
-          : 'Write a prompt to start. Nothing is charged until you generate.';
+      return isReference() ? 'Say what to take from the other photos.'
+        : mode() === 'edit' ? 'Describe the change you want.'
+        : 'Describe the image first. Nothing is charged until you generate.';
     }
     if (wordCount(promptEl.value) < 3) return 'A prompt needs at least three words.';
-    if (isReference() && !likenessConsent) {
-      return 'Confirm you have permission to use these likenesses.';
-    }
     return null;
   }
 
+  function renderHint() {
+    var text, tone = '';
+    if (attention) { text = attention; tone = 'is-danger'; }
+    else if (busy) text = 'Locked while a run is in flight.';
+    else if (isReference() && currentResolution() === '1k') {
+      text = '1K kept the least of the likeness in testing. 2K costs a little more and holds the face noticeably better.';
+      tone = 'is-warning';
+    }
+    else if (mode() === 'edit' && !isEditEach() && state.variants > 1) {
+      text = 'Variants of an edit come back very similar. If a result is wrong, change the prompt or the crop instead.';
+    }
+    else if (isReference()) text = 'Photo 1 is the base and is kept as it is. Name the others by number — type @ to pick one — and say exactly what to take from each.';
+    else if (isEditEach()) text = 'The same change is applied to each photo — ' + state.sources.length + ' images back, one per photo.';
+    else if (mode() === 'edit') text = 'Describe the change. Add another photo to combine them into one picture.';
+    else text = 'Plain description works better than keywords. Ctrl + Enter generates.';
+    hintEl.textContent = text;
+    hintEl.className = 'composer__hint ' + tone;
+  }
+
+  function actionLabel() {
+    if (mode() === 'edit') {
+      if (isEditEach()) return 'Edit ' + state.sources.length + ' photos';
+      return isReference() ? 'Combine' : 'Apply edit';
+    }
+    return 'Generate';
+  }
+
   function renderAction() {
+    // A reason that no longer applies stops being shown the moment it is fixed.
+    if (attention && blockingReason() !== attention) attention = '';
+    renderHint();
+    renderCost();
     if (busy) return; // the busy state owns the button until the run settles
 
-    var reason = blockingReason();
     var rateLeft = Math.max(0, Math.ceil((rateLimitUntil - Date.now()) / 1000));
-
     actionBtn.classList.remove('is-busy');
-
     if (rateLeft > 0) {
       actionBtn.disabled = true;
-      actionBtn.textContent = (state.mode === 'edit' ? 'Apply edit in ' : 'Generate in ') + duration(rateLeft * 1000);
+      actionBtn.textContent = 'Wait ' + duration(rateLeft * 1000);
       actionBtn.classList.add('num');
-    } else {
-      actionBtn.classList.remove('num');
-      actionBtn.disabled = Boolean(reason) || !config || !config.hasKey;
-      actionBtn.textContent = actionLabel();
+      return;
     }
-
-    // Disabled action always carries a reason underneath.
-    if (reason && rateLeft <= 0) {
-      actionReason.hidden = false;
-      actionReason.textContent = reason;
-      costLine.hidden = true;
-    } else {
-      actionReason.hidden = true;
-      renderCost();
-    }
-
-    // The prompt shows its own error only once something has been typed.
-    var short = promptEl.value.trim() && wordCount(promptEl.value) < 3;
-    promptEl.classList.toggle('is-error', Boolean(short));
+    actionBtn.classList.remove('num');
+    // Never a dead grey button without a word of explanation: it stays live and
+    // says what is missing when pressed. Only a server with no key disables it.
+    actionBtn.disabled = !config || !config.hasKey;
+    actionBtn.textContent = actionLabel();
   }
 
   function renderCost() {
     var est = estimate();
     if (!est) {
       // No price entry for this model: say the cost is unknown, never guess.
-      costLine.hidden = false;
-      costLabel.textContent = 'Estimated cost';
-      costValue.textContent = 'unknown';
+      costValue.textContent = 'cost unknown';
+      costValue.title = 'This model has no price on record.';
       return;
     }
-    costLine.hidden = false;
-    costLabel.textContent = 'Estimated cost';
-    if (state.mode === 'edit') {
-      // est.input is the whole input charge for one request — every source it
-      // carries — so per request is the output price plus that.
-      costValue.textContent = est.count > 1
-        ? money(est.total) + ' · ' + est.count + ' × ' + money(est.per + est.input)
-        : money(est.total) + ' · 1 image';
-    } else {
-      costValue.textContent = money(est.total) + ' · ' + est.count + ' × ' + money(est.per);
-    }
+    costValue.textContent = money(est.total);
+    costValue.title = 'Estimated cost: ' + money(est.total) +
+      (est.count > 1 ? ' — ' + est.count + ' × ' + money(est.per) : '') + '. Charged as images arrive.';
+    costValue.setAttribute('aria-label', costValue.title);
   }
 
-  // Recompute on every settings change.
+  function autosize() {
+    promptEl.style.height = 'auto';
+    promptEl.style.height = Math.min(200, Math.max(44, promptEl.scrollHeight)) + 'px';
+  }
+
+  // Recompute on every change.
   function renderRail() {
-    renderModeChrome();
-    renderQuality();
-    buildShapeOptions();
-    buildSizeOptions();
+    var reference = isReference();
+    promptLabel.textContent = reference ? 'What should it take from them?'
+      : mode() === 'edit' ? 'What should change?' : 'What should it make?';
+    promptEl.placeholder = reference
+      ? 'Keep photo 1 as it is. Replace the head with the person in photo 2…'
+      : mode() === 'edit'
+        ? 'Describe the change — “make the background a plain warm grey”'
+        : 'Describe the image — subject, setting, light, mood';
+    renderPills();
     renderRetirement();
     renderSource();
-    var count = currentCount();
-    var word = state.mode === 'edit' ? ' variant' : ' frame';
-    framesValue.textContent = count + (count === 1 ? word : word + 's');
-    framesValue.classList.toggle('is-idle', count === 1);
-    framesEl.value = count;
-    framesEl.style.setProperty('--fill', ((count - 1) / (maxCount() - 1) * 100) + '%');
-    promptCount.textContent = promptEl.value.length + ' / 1000';
+    renderChipPanel();
     renderAction();
     persist();
   }
 
   function persist() {
     writeStore(STORE_KEY, {
-      model: state.model,
-      quality: state.quality,
-      shape: state.shape,
-      resolution: state.resolution,
-      frames: state.frames,
-      editShape: state.editShape,
-      editResolution: state.editResolution,
-      variants: state.variants,
-      name: state.name
+      model: state.model, quality: state.quality,
+      shape: state.shape, resolution: state.resolution, frames: state.frames,
+      editShape: state.editShape, editResolution: state.editResolution, variants: state.variants,
+      name: state.name, filter: state.filter
     });
   }
 
   // -------------------------------------------------------------------------
-  // 10 Errors. Warning for things that clear on their own or with a retry,
-  // danger for things that need a person. They persist until the next
-  // successful action — no auto-dismiss, no toasts anywhere in this product.
+  // Errors. Warning for things that clear on their own or with a retry, danger
+  // for things that need a person. They persist until the next successful
+  // action — no auto-dismiss, no toasts anywhere in this product.
   // -------------------------------------------------------------------------
-  function clearError() {
-    runError.innerHTML = '';
-  }
+  function clearError() { runError.innerHTML = ''; }
 
   function showError(title, body, tone) {
     runError.innerHTML = '';
-    var box = el('div', 'notice notice--run notice--' + (tone === 'warning' ? 'warning' : 'danger'));
+    var box = el('div', 'notice notice--' + (tone === 'warning' ? 'warning' : 'danger'));
     box.appendChild(el('div', 'notice__title num', title));
     box.appendChild(el('div', 'notice__body num', body));
     runError.appendChild(box);
@@ -1161,11 +1091,10 @@
     }
     if (code === 'consent_required') {
       return ['danger', 'Confirm permission first',
-        'Combining photos uses real people’s likenesses. Tick the confirmation under the photos, then run it again. Nothing was charged.'];
+        'Combining photos uses real people’s likenesses. Press Combine again and confirm you have permission. Nothing was charged.'];
     }
     if (code === 'likeness_policy') {
-      return ['danger', 'This studio will not make that',
-        message + ' Nothing was charged.'];
+      return ['danger', 'This studio will not make that', message + ' Nothing was charged.'];
     }
     if (code === 'model_unavailable') {
       // xAI's own wording ("does not exist or your team does not have access")
@@ -1182,17 +1111,11 @@
               : 'Try again in a few minutes. ') +
         'Your credits and the team key are fine.'];
     }
-    if (code === 'too_large') {
-      return ['danger', 'That photo is too large',
-        message];
-    }
-    if (code === 'bad_request') {
-      return ['danger', 'xAI would not accept that request', message];
-    }
+    if (code === 'too_large') return ['danger', 'That photo is too large', message];
+    if (code === 'bad_request') return ['danger', 'xAI would not accept that request', message];
     // Unmapped: show the status code and what to do with it. Never "something
     // went wrong".
-    return ['danger', 'xAI returned ' + status,
-      message + ' Retry, then post the code in #design-ops.'];
+    return ['danger', 'xAI returned ' + status, message + ' Retry, then post the code in #design-ops.'];
   }
 
   function startRateLimit(seconds) {
@@ -1210,11 +1133,75 @@
   }
 
   // -------------------------------------------------------------------------
-  // Runs
+  // The gallery
   // -------------------------------------------------------------------------
+  function doneImages(run) {
+    var out = [];
+    run.frames.forEach(function (f) { if (f.image) out.push(f.image); });
+    return out;
+  }
+
+  function dayLabel(ms) {
+    var d = new Date(ms), now = new Date();
+    var startOf = function (x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+    var diff = Math.round((startOf(now) - startOf(d)) / 86400000);
+    if (diff <= 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+
+  // Which frames of a run the current filter shows.
+  function visibleIndexes(run) {
+    var idx = [];
+    run.frames.forEach(function (f, i) {
+      if (state.filter === 'fav' && !(f.image && f.image.favourite)) return;
+      idx.push(i);
+    });
+    if (state.filter === 'mine' && !sameName(run.user, state.name)) return [];
+    if (state.filter === 'mine' && !state.name.trim()) return [];
+    return idx;
+  }
+
+  // Every run that still holds a favourite, however old — not only the recent
+  // ones the page loaded at the start. Asked for when the Library is opened.
+  var libraryLoaded = false;
+  async function loadLibrary() {
+    if (!config || !config.savesImages) return;
+    try {
+      var res = await fetch('/api/runs?favourites=1&limit=500', { headers: authHeaders({}) });
+      if (!res.ok) return;
+      var payload = await res.json();
+      var have = {};
+      runs.forEach(function (r) { have[r.id] = true; have['saved-' + r.id] = true; });
+      var fresh = (payload.runs || []).map(restoreRun).filter(function (r) { return !have[r.id]; });
+      libraryLoaded = true;
+      if (!fresh.length) return;
+      runs = runs.concat(fresh).sort(function (a, b) { return b.startedAt - a.startedAt; });
+      if (state.filter === 'fav') renderRuns();
+    } catch (err) { /* the library shows what is already loaded */ }
+  }
+
+  function renderLibrary() {
+    var wall = [];
+    runs.forEach(function (run) {
+      run.frames.forEach(function (f, i) { if (f.image && f.image.favourite) wall.push([run, i]); });
+    });
+    if (!wall.length) return 0;
+    var card = el('article', 'run');
+    var head = el('div', 'library__head');
+    head.appendChild(el('h2', 'library__title', 'Library'));
+    head.appendChild(el('span', 'library__note num', wall.length + (wall.length === 1 ? ' favourite' : ' favourites') +
+      ' · kept for good, never cleared to make room'));
+    card.appendChild(head);
+    var grid = el('div', 'run__grid');
+    wall.forEach(function (pair) { grid.appendChild(renderFrame(pair[0], pair[1])); });
+    card.appendChild(grid);
+    results.insertBefore(card, empty);
+    return wall.length;
+  }
+
   function renderRuns() {
-    empty.hidden = runs.length > 0;
-    Array.prototype.slice.call(results.querySelectorAll('.run')).forEach(function (n) { n.remove(); });
+    Array.prototype.slice.call(results.querySelectorAll('.run, .day')).forEach(function (n) { n.remove(); });
 
     // Forget anything selected that is no longer on the page, so the count in
     // the bar can never claim more than exists.
@@ -1224,227 +1211,189 @@
     });
     Array.from(selected).forEach(function (id) { if (!live[id]) selected.delete(id); });
 
-    runs.forEach(function (run) {
-      results.insertBefore(renderRun(run), empty);
+    var shown = 0, lastDay = null;
+    if (state.filter === 'fav') shown = renderLibrary();
+    else runs.forEach(function (run) {
+      var idx = visibleIndexes(run);
+      if (!idx.length) return;
+      var day = dayLabel(run.startedAt);
+      if (day !== lastDay) { results.insertBefore(el('div', 'day', day), empty); lastDay = day; }
+      results.insertBefore(renderRun(run, idx), empty);
+      shown++;
     });
+
+    empty.hidden = shown > 0;
+    if (!shown) {
+      var filtered = state.filter === 'fav' || (runs.length > 0 && state.filter !== 'all');
+      emptySeeds.hidden = filtered;
+      if (state.filter === 'fav' && filtered) {
+        emptyTitle.textContent = 'Your library is empty';
+        emptyBody.textContent = 'Star a frame and it is kept here for good. Favourites are never cleared to make room for new images.';
+      } else if (state.filter === 'mine' && filtered) {
+        emptyTitle.textContent = state.name.trim() ? 'No runs under your name' : 'Add your name to see your runs';
+        emptyBody.textContent = state.name.trim()
+          ? 'Runs you make as “' + state.name.trim() + '” appear here.'
+          : 'Open the menu at the top right and fill in Working as. Runs you make from then on are yours.';
+      } else {
+        emptyTitle.textContent = 'Describe an image to begin';
+        emptyBody.textContent = 'Type below and generate up to ten frames at once. Add photos to edit them, or to combine several into one picture. Every run stays on this page.';
+      }
+    }
     renderSelectionBar();
   }
 
-  // Frames that came back, in slot order. Each carries its own frame number, so
-  // a run that lost frame 3 still labels the rest correctly.
-  function doneImages(run) {
-    var out = [];
-    run.frames.forEach(function (f) { if (f.image) out.push(f.image); });
-    return out;
-  }
-
-  function countText(run) {
-    var total = run.frames.length;
-    var got = doneImages(run).length;
-    var text;
-    // Editing photos apart counts photos; everything else counts images out.
-    var word = run.mode === 'edit' && run.plan === 'each' ? ' photo' : ' image';
-    if (run.status === 'running' || got === total) {
-      text = total + (total === 1 ? word : word + 's');
-    } else {
-      // Say plainly that some are missing rather than quoting the number asked for.
-      text = got + ' of ' + total + word + 's';
-    }
-    if (run.status !== 'running' && typeof run.cost === 'number' && run.cost > 0) {
-      // A tilde means the server had to estimate: xAI sent no usage block.
-      text += ' · ' + (run.costEstimated ? '≈' : '') + money(run.cost);
-    }
-    return text;
-  }
-
-  // Prefer the dimensions of the image that came back over the rail's estimate.
-  function sizeChipText(run) {
-    var shapeText = run.shape === 'auto' ? 'Auto' : run.shape;
-    var first = doneImages(run)[0];
-    if (first && first.width) return shapeText + ' · ' + first.width + '×' + first.height;
-    return shapeText + ' · ' + sizeLabel(run.shape, run.resolution);
-  }
-
-  function chipsFor(run) {
-    var p = priceEntry(run.model);
-    var chips = [p ? p.label : run.model];
-
-    // A degraded run was retried without the optional settings, so the shape,
-    // size and quality asked for did not apply. Say that rather than showing
-    // chips that describe a run which never happened.
-    if (run.degraded) {
-      chips.push('Settings dropped');
-      chips.push(countText(run));
-      return chips;
-    }
-
-    if (run.quality && acceptsQuality(run.model)) {
-      chips.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
-    }
-    if (run.mode === 'edit') {
-      var nSrc = run.sourceCount || (run.sources ? run.sources.length : 0);
-      chips.push(run.plan === 'reference' && nSrc > 1 ? 'Combined ' + nSrc + ' photos' : 'Edit');
-    }
-    chips.push(sizeChipText(run));
-    chips.push(countText(run));
-    return chips;
-  }
-
-  function renderRun(run) {
+  // A run in the gallery is its frames and nothing else. What was asked for,
+  // what it was made from, what it cost and what can be done with it are all on
+  // the viewer's card, one click away.
+  function renderRun(run, idx) {
     var card = el('article', 'run');
     card.dataset.runId = run.id;
-
-    var head = el('div', 'run__head');
-    var headline = el('div', 'run__headline');
-    var promptLine = el('div', 'run__prompt', run.prompt);
-    promptLine.title = run.prompt;
-    headline.appendChild(promptLine);
-
-    var chipRow = el('div', 'run__chips');
-    var sizeText = sizeChipText(run);
-    chipsFor(run).forEach(function (text, i) {
-      var chip = el('span', 'chip' + (i >= 2 ? ' num' : ''), text);
-      // Tagged so the first image can correct it to real dimensions on load.
-      if (sizeText && text === sizeText) chip.dataset.sizeChip = '1';
-      chipRow.appendChild(chip);
-    });
-    headline.appendChild(chipRow);
-    head.appendChild(headline);
-
-    var aside = el('div', 'run__aside');
-    var got = doneImages(run).length;
-
-    if (run.status === 'running') {
-      // Frames arrive one at a time now, so the header can say how many are back.
-      var backNode = el('span', 'run__status num', got + ' of ' + run.frames.length + ' back');
-      backNode.dataset.backFor = run.id;
-      aside.appendChild(backNode);
-      var elapsed = el('span', 'run__time num', 'Running ' + duration(Date.now() - run.startedAt));
-      elapsed.dataset.elapsedFor = run.id;
-      aside.appendChild(elapsed);
-    } else {
-      var made = new Date(run.finishedAt || run.startedAt);
-      var when = clockTime(made);
-      var took = duration((run.finishedAt || Date.now()) - run.startedAt);
-      var timeText;
-      if (run.status === 'cancelled') {
-        timeText = 'Cancelled · kept ' + got + ' of ' + run.frames.length;
-      } else if (run.restored) {
-        // Restored from the server: the duration was not recorded, and the run
-        // may not even be from today, so date it rather than invent a 0:00.
-        var today = new Date();
-        var sameDay = made.toDateString() === today.toDateString();
-        timeText = sameDay ? when : made.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' · ' + when;
-      } else {
-        timeText = when + ' · took ' + took;
-      }
-      aside.appendChild(el('span', 'run__time num', timeText));
-      if (got > 0) {
-        var dlAll = el('button', 'btn-text btn-text--13', got > 1 ? 'Download all' : 'Download');
-        dlAll.type = 'button';
-        dlAll.addEventListener('click', function () { downloadRun(run); });
-        aside.appendChild(dlAll);
-      }
-    }
-    head.appendChild(aside);
-    card.appendChild(head);
-
     var grid = el('div', 'run__grid');
-    var ratio = aspectRatioCss(run.shape);
-    run.frames.forEach(function (frame, i) {
-      grid.appendChild(renderFrame(run, i, ratio));
-    });
+    idx.forEach(function (i) { grid.appendChild(renderFrame(run, i)); });
     card.appendChild(grid);
     return card;
   }
 
-  // -------------------------------------------------------------------------
-  // Two or more photos: combine into one, or edit each
-  // -------------------------------------------------------------------------
-  function setPlan(plan) {
-    if (busy) return;
-    state.plan = plan === 'each' ? 'each' : 'reference';
-    cropOpen = -1;
-    renderRail();
-  }
-
-  [planReference, planEach].forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      setPlan(btn.dataset.plan);
-      btn.focus();
-    });
-  });
-
-  planSwitch.addEventListener('keydown', function (e) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    var next = state.plan === 'reference' ? 'each' : 'reference';
-    setPlan(next);
-    (next === 'reference' ? planReference : planEach).focus();
-  });
-
-  consentBox.addEventListener('change', function () {
-    likenessConsent = consentBox.checked;
-    renderRail();
-  });
-
-  // The first time a second photo lands, the settings the experiment found
-  // best become the defaults: Imagine 2.0 at 2k. Only on that crossing — a
-  // choice made afterwards stands.
-  function adoptReferenceDefaults() {
-    var prices = config && config.prices ? config.prices : {};
-    var preferred = 'grok-imagine-image-2.0';
-    if (prices[preferred] && !modelIsRetired(preferred)) {
-      state.model = preferred;
-      retiredFallback = null;
-      buildModelOptions();
+  // Deletion cannot be undone, so the button asks a second time in place rather
+  // than opening a dialog.
+  var CONFIRM_MS = 4000;
+  function armConfirm(btn, idle, armedText, onConfirm) {
+    var armed = false, timer = null;
+    function disarm() {
+      if (!armed) return;
+      armed = false;
+      idle();
+      btn.classList.remove('is-armed', 'btn-text--confirm');
+      if (timer) { clearTimeout(timer); timer = null; }
     }
-    state.editResolution = '2k';
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (armed) { disarm(); onConfirm(); return; }
+      armed = true;
+      btn.textContent = armedText;
+      btn.classList.add('is-armed', 'btn-text--confirm');
+      timer = setTimeout(disarm, CONFIRM_MS);
+    });
+    btn.addEventListener('blur', disarm);
+    return disarm;
   }
+
+  function renderFrame(run, index) {
+    var frame = run.frames[index];
+    var wrap = el('div', 'frame');
+    wrap.dataset.frameFor = run.id + ':' + index;
+    var ratio = run.ratio || aspectRatioCss(run.shape);
+    if (ratio) wrap.style.setProperty('--ratio', ratio);
+    var n = index + 1;
+
+    // Waiting. Only the frame actually being worked on pulses.
+    if (frame.status === 'running' || frame.status === 'queued') {
+      var running = frame.status === 'running';
+      wrap.appendChild(el('div', 'frame__placeholder' + (running ? ' is-running' : ''), running ? 'Rendering' : 'Queued'));
+      return wrap;
+    }
+
+    // A single frame failed inside an otherwise good run. Offer to retry just
+    // this one rather than making the whole run again.
+    if (frame.status === 'failed') {
+      wrap.classList.add('frame--failed');
+      var box = el('div', 'frame__failed');
+      box.appendChild(el('b', null, 'Frame ' + n + ' failed'));
+      box.appendChild(el('span', null, frame.error || 'The other frames arrived.'));
+      var retry = el('button', 'btn-quiet', 'Try again');
+      retry.type = 'button';
+      retry.addEventListener('click', function () { retryFrame(run, index); });
+      box.appendChild(retry);
+      wrap.appendChild(box);
+      return wrap;
+    }
+
+    if (frame.status === 'deleted' || frame.status === 'cancelled') {
+      wrap.appendChild(el('div', 'frame__placeholder', frame.status === 'deleted' ? 'Deleted' : 'Not started'));
+      return wrap;
+    }
+
+    var image = frame.image;
+    if (!image) return wrap;
+
+    var btn = el('button', 'frame__button');
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Open frame ' + n + ': details, download and reuse');
+    var img = document.createElement('img');
+    img.src = image.src;
+    img.alt = run.prompt;   // alt text on generated images is the prompt
+    img.loading = 'lazy';
+    // Record what xAI actually produced: the only truthful source for the size.
+    img.addEventListener('load', function () {
+      if (!ratio) wrap.style.setProperty('--ratio', img.naturalWidth + ' / ' + img.naturalHeight);
+      if (image.width) return;
+      image.width = img.naturalWidth;
+      image.height = img.naturalHeight;
+      refreshRunCaption(run);
+    });
+    btn.appendChild(img);
+    btn.addEventListener('click', function () { openLightbox(run, image); });
+    wrap.appendChild(btn);
+
+    // Selecting, favouriting and deleting need the server to have kept a copy.
+    if (isStored(image)) {
+      var sel = el('label', 'frame__select');
+      var box2 = document.createElement('input');
+      box2.type = 'checkbox';
+      box2.checked = selected.has(image.id);
+      box2.setAttribute('aria-label', 'Select frame ' + n);
+      box2.addEventListener('change', function () {
+        if (box2.checked) selected.add(image.id); else selected.delete(image.id);
+        renderSelectionBar();
+      });
+      sel.appendChild(box2);
+      wrap.appendChild(sel);
+
+      var fav = el('button', 'frame__fav');
+      fav.type = 'button';
+      fav.appendChild(icon('star', 14));
+      var paintFav = function (on) {
+        fav.setAttribute('aria-pressed', String(on));
+        fav.setAttribute('aria-label', on ? 'Remove frame ' + n + ' from favourites' : 'Favourite frame ' + n);
+        fav.title = on ? 'Favourite — kept when old images are cleared' : 'Favourite';
+      };
+      paintFav(Boolean(image.favourite));
+      fav.addEventListener('click', async function () {
+        var next = fav.getAttribute('aria-pressed') !== 'true';
+        if (!(await toggleFavourite(image, next))) return;
+        paintFav(next);
+        if (state.filter === 'fav') renderRuns();
+      });
+      wrap.appendChild(fav);
+    }
+
+    return wrap;
+  }
+
+  // Repaint one frame in place, so a frame landing does not move the others.
+  function refreshFrame(run, index) {
+    var node = results.querySelector('[data-frame-for="' + run.id + ':' + index + '"]');
+    if (node) node.replaceWith(renderFrame(run, index));
+  }
+
+  // Nothing in the gallery shows a run's size or cost any more; if the viewer
+  // is open on this run, its card is what needs refreshing.
+  function refreshRunCaption(run) {
+    if (lightboxState && lightboxState.run === run) renderLightbox();
+  }
+
+  function tickElapsed() { /* elapsed time is no longer shown in the gallery */ }
 
   // -------------------------------------------------------------------------
   // Selecting, favouriting, deleting
-  //
-  // Deletion cannot be undone, so the button asks a second time in place rather
-  // than opening a dialog — the design has no modals and no toasts.
   // -------------------------------------------------------------------------
-  var selected = new Set();
-  var CONFIRM_MS = 4000;
-
   function authHeaders(extra) {
     var h = extra || {};
     if (password) h['x-team-password'] = password;
     return h;
   }
 
-  // A frame can only be favourited or deleted if the server kept a copy of it.
-  function isStored(image) {
-    return Boolean(image && image.id);
-  }
-
-  function armConfirm(btn, label, confirmLabel, onConfirm) {
-    var armed = false;
-    var timer = null;
-    function disarm() {
-      armed = false;
-      btn.textContent = label;
-      btn.classList.remove('btn-text--confirm');
-      if (timer) { clearTimeout(timer); timer = null; }
-    }
-    btn.addEventListener('click', function () {
-      if (armed) {
-        disarm();
-        onConfirm();
-        return;
-      }
-      armed = true;
-      btn.textContent = confirmLabel;
-      btn.classList.add('btn-text--confirm');
-      timer = setTimeout(disarm, CONFIRM_MS);
-    });
-    btn.addEventListener('blur', disarm);
-    return btn;
-  }
+  function isStored(image) { return Boolean(image && image.id); }
 
   async function toggleFavourite(image, on) {
     if (!isStored(image)) return false;
@@ -1460,8 +1409,7 @@
       return true;
     } catch (err) {
       showError('Could not save that favourite',
-        'The server did not accept the change. Check it is still running, then try again.',
-        'warning');
+        'The server did not accept the change. Check it is still running, then try again.', 'warning');
       return false;
     }
   }
@@ -1472,17 +1420,12 @@
     ids.forEach(function (id) { gone[id] = true; selected.delete(id); });
     runs.forEach(function (run) {
       run.frames.forEach(function (f) {
-        if (f.image && gone[f.image.id]) {
-          f.image = null;
-          f.status = 'deleted';
-        }
+        if (f.image && gone[f.image.id]) { f.image = null; f.status = 'deleted'; }
       });
     });
-    // A run with nothing left in it is not worth a card.
+    // A run with nothing left in it is not worth a row.
     runs = runs.filter(function (run) {
-      return run.status === 'running' || run.frames.some(function (f) {
-        return f.image || f.status === 'failed';
-      });
+      return run.status === 'running' || run.frames.some(function (f) { return f.image || f.status === 'failed'; });
     });
     renderRuns();
   }
@@ -1499,9 +1442,7 @@
       if (res.status === 401) { lockOut(); return; }
       var payload = await res.json().catch(function () { return null; });
       if (!res.ok) {
-        showError('Could not delete',
-          (payload && payload.error) || 'The server refused the request. Try again.',
-          'danger');
+        showError('Could not delete', (payload && payload.error) || 'The server refused the request. Try again.', 'danger');
         return;
       }
       // Treat missing files as gone too — the goal was for them not to be there.
@@ -1509,25 +1450,20 @@
       clearError();
     } catch (err) {
       showError('Could not reach the studio server',
-        'Nothing was deleted. Check the server is still running, then try again.',
-        'danger');
+        'Nothing was deleted. Check the server is still running, then try again.', 'danger');
     }
   }
 
   function renderSelectionBar() {
     var existing = results.querySelector('.selection-bar');
-    if (!selected.size) {
-      if (existing) existing.remove();
-      return;
-    }
+    if (!selected.size) { if (existing) existing.remove(); return; }
     var bar = existing || el('div', 'selection-bar');
     bar.innerHTML = '';
     bar.appendChild(el('span', 'selection-bar__count num',
       selected.size + (selected.size === 1 ? ' image selected' : ' images selected')));
-
     var actions = el('div', 'selection-bar__actions');
 
-    var dl = el('button', 'btn-text btn-text--13', 'Download');
+    var dl = el('button', 'btn-text', 'Download');
     dl.type = 'button';
     dl.addEventListener('click', function () {
       var i = 0;
@@ -1542,203 +1478,19 @@
     });
     actions.appendChild(dl);
 
-    var del = el('button', 'btn-text btn-text--13 btn-text--danger', 'Delete');
+    var del = el('button', 'btn-text btn-text--danger', 'Delete');
     del.type = 'button';
-    armConfirm(del, 'Delete',
-      'Delete ' + selected.size + ' permanently?',
-      function () { deleteImages(Array.from(selected)); });
+    armConfirm(del, function () { del.textContent = 'Delete'; },
+      'Delete ' + selected.size + ' permanently?', function () { deleteImages(Array.from(selected)); });
     actions.appendChild(del);
 
-    var clear = el('button', 'btn-text btn-text--13', 'Clear selection');
+    var clear = el('button', 'btn-text', 'Clear selection');
     clear.type = 'button';
-    clear.addEventListener('click', function () {
-      selected.clear();
-      renderRuns();
-    });
+    clear.addEventListener('click', function () { selected.clear(); renderRuns(); });
     actions.appendChild(clear);
 
     bar.appendChild(actions);
     if (!existing) results.insertBefore(bar, results.firstChild);
-  }
-
-  function mkTextButton(text, fn) {
-    var b = el('button', 'btn-text', text);
-    b.type = 'button';
-    b.addEventListener('click', fn);
-    return b;
-  }
-
-  function renderFrame(run, index, ratio) {
-    var frame = run.frames[index];
-    var wrap = el('div', 'frame');
-    wrap.dataset.frameFor = run.id + ':' + index;
-    var foot = el('div', 'frame__foot');
-    var label = el('span', 'frame__label num', 'Frame ' + (index + 1));
-    var actions = el('span', 'frame__actions');
-
-    // Still waiting. Sunken fill with a hairline — no shimmer sweep. Only the
-    // frame actually being worked on pulses; the rest sit quiet as "Queued".
-    if (frame.status === 'running' || frame.status === 'queued') {
-      var running = frame.status === 'running';
-      var ph = el('div', running ? 'frame__placeholder' : 'frame__placeholder frame__placeholder--idle',
-        running ? 'Rendering' : '');
-      if (ratio) ph.style.aspectRatio = ratio; else ph.style.minHeight = '240px';
-      wrap.appendChild(ph);
-      foot.appendChild(label);
-      foot.appendChild(el('span', 'frame__label num', running ? 'In progress' : 'Queued'));
-      wrap.appendChild(foot);
-      return wrap;
-    }
-
-    // A single frame failed inside an otherwise good batch. Offer to retry just
-    // this one rather than making the whole run again.
-    if (frame.status === 'failed') {
-      var box = el('div', 'frame__failed');
-      if (ratio) box.style.aspectRatio = ratio; else box.style.minHeight = '240px';
-      var msg = el('span', null);
-      msg.appendChild(el('b', null, 'Frame ' + (index + 1) + ' failed'));
-      msg.appendChild(document.createTextNode(frame.error || 'The other frames arrived. Use Again to retry just this one.'));
-      box.appendChild(msg);
-      wrap.appendChild(box);
-      foot.appendChild(label);
-      actions.appendChild(mkTextButton('Again', function () { retryFrame(run, index); }));
-      foot.appendChild(actions);
-      wrap.appendChild(foot);
-      return wrap;
-    }
-
-    if (frame.status === 'deleted') {
-      var dbox = el('div', 'frame__placeholder frame__placeholder--idle', '');
-      if (ratio) dbox.style.aspectRatio = ratio; else dbox.style.minHeight = '240px';
-      wrap.appendChild(dbox);
-      foot.appendChild(label);
-      foot.appendChild(el('span', 'frame__label num', 'Deleted'));
-      wrap.appendChild(foot);
-      return wrap;
-    }
-
-    if (frame.status === 'cancelled') {
-      var cbox = el('div', 'frame__placeholder frame__placeholder--idle', '');
-      if (ratio) cbox.style.aspectRatio = ratio; else cbox.style.minHeight = '240px';
-      wrap.appendChild(cbox);
-      foot.appendChild(label);
-      foot.appendChild(el('span', 'frame__label num', 'Not started'));
-      wrap.appendChild(foot);
-      return wrap;
-    }
-
-    var image = frame.image;
-    if (!image) return wrap;
-
-    var btn = el('button', 'frame__button');
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Open frame ' + (index + 1) + ' full size');
-    var img = document.createElement('img');
-    img.src = image.src;
-    // Alt text on generated images uses the prompt.
-    img.alt = run.prompt;
-    img.loading = 'lazy';
-    if (ratio) img.style.aspectRatio = ratio;
-    // Record what xAI actually produced. The rail's size label is an estimate;
-    // this is the real thing, and it is what results and the lightbox report.
-    img.addEventListener('load', function () {
-      if (image.width) return;
-      image.width = img.naturalWidth;
-      image.height = img.naturalHeight;
-      var card = wrap.closest('.run');
-      var chip = card && card.querySelector('[data-size-chip]');
-      if (chip) chip.textContent = sizeChipText(run);
-    });
-    btn.appendChild(img);
-    btn.addEventListener('click', function () { openLightbox(run, image); });
-    wrap.appendChild(btn);
-
-    // Select and favourite live on their own line above the actions, so the
-    // action row stays readable at the grid's 240px minimum column.
-    if (isStored(image)) {
-      var meta = el('div', 'frame__meta');
-
-      var box = document.createElement('input');
-      box.type = 'checkbox';
-      box.className = 'frame__select';
-      box.checked = selected.has(image.id);
-      box.setAttribute('aria-label', 'Select frame ' + (index + 1));
-      box.addEventListener('change', function () {
-        if (box.checked) selected.add(image.id); else selected.delete(image.id);
-        renderSelectionBar();
-      });
-      meta.appendChild(box);
-      meta.appendChild(label);
-
-      var fav = el('button', 'frame__fav');
-      fav.type = 'button';
-      var on = Boolean(image.favourite);
-      fav.setAttribute('aria-pressed', String(on));
-      fav.setAttribute('aria-label', (on ? 'Remove frame ' : 'Favourite frame ') + (index + 1) + (on ? ' from favourites' : ''));
-      fav.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
-        '<path d="M7 1.6l1.65 3.35 3.7.54-2.68 2.6.63 3.68L7 10.03l-3.3 1.74.63-3.68L1.65 5.49l3.7-.54z" ' +
-        'stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
-      fav.appendChild(el('span', null, on ? 'Favourite' : 'Favourite'));
-      fav.addEventListener('click', async function () {
-        var next = fav.getAttribute('aria-pressed') !== 'true';
-        if (await toggleFavourite(image, next)) {
-          fav.setAttribute('aria-pressed', String(next));
-          fav.setAttribute('aria-label', (next ? 'Remove frame ' : 'Favourite frame ') + (index + 1) + (next ? ' from favourites' : ''));
-        }
-      });
-      meta.appendChild(fav);
-      wrap.appendChild(meta);
-    } else {
-      foot.appendChild(label);
-    }
-
-    actions.appendChild(mkTextButton('Download', function () { downloadImage(run, image); }));
-    actions.appendChild(el('span', 'frame__sep', '·'));
-    actions.appendChild(mkTextButton('Edit this', function () { editThis(run, image); }));
-    actions.appendChild(el('span', 'frame__sep', '·'));
-    actions.appendChild(mkTextButton('Again', function () { again(run); }));
-
-    if (isStored(image)) {
-      actions.appendChild(el('span', 'frame__sep', '·'));
-      var del = el('button', 'btn-text btn-text--danger', 'Delete');
-      del.type = 'button';
-      armConfirm(del, 'Delete', 'Delete for good?', function () {
-        deleteImages([image.id]);
-      });
-      actions.appendChild(del);
-    }
-
-    foot.appendChild(actions);
-    wrap.appendChild(foot);
-    return wrap;
-  }
-
-  // Repaint one frame in place. The grid never reflows, so a frame landing does
-  // not move the ones already on screen.
-  function refreshFrame(run, index) {
-    var node = results.querySelector('[data-frame-for="' + run.id + ':' + index + '"]');
-    if (!node) return;
-    node.replaceWith(renderFrame(run, index, aspectRatioCss(run.shape)));
-  }
-
-  function refreshRunHeader(run) {
-    var card = results.querySelector('[data-run-id="' + run.id + '"]');
-    if (!card) return;
-    var back = card.querySelector('[data-back-for="' + run.id + '"]');
-    if (back) back.textContent = doneImages(run).length + ' of ' + run.frames.length + ' back';
-    var chips = card.querySelectorAll('.chip');
-    var texts = chipsFor(run);
-    if (chips.length === texts.length) {
-      for (var i = 0; i < chips.length; i++) chips[i].textContent = texts[i];
-    }
-  }
-
-  function tickElapsed() {
-    runs.forEach(function (run) {
-      if (run.status !== 'running') return;
-      var node = results.querySelector('[data-elapsed-for="' + run.id + '"]');
-      if (node) node.textContent = 'Running ' + duration(Date.now() - run.startedAt);
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -1769,12 +1521,12 @@
   }
 
   // -------------------------------------------------------------------------
-  // Edit this / Again
+  // Use as reference / Again / Reuse prompt
   // -------------------------------------------------------------------------
   function toDataUri(src) {
-    if (!src || src.indexOf('/api/image/') !== 0) return Promise.resolve(src);
+    if (!src || src.indexOf('/api/') !== 0) return Promise.resolve(src);
     return fetch(src)
-      .then(function (r) { return r.blob(); })
+      .then(function (r) { if (!r.ok) throw new Error('gone'); return r.blob(); })
       .then(function (blob) {
         return new Promise(function (resolve, reject) {
           var fr = new FileReader();
@@ -1785,67 +1537,127 @@
       });
   }
 
-  async function editThis(run, image) {
-    if (!image) return;
+  // Sends a result into the composer as a photo. With nothing attached it
+  // becomes the photo being edited; otherwise it joins as the next reference.
+  async function useAsReference(run, image) {
+    if (!image || busy) return;
     closeLightbox();
-
-    // Coming from generate, the prompt holds a description of an image, which is
-    // the wrong instruction for an edit — leaving it would let Cmd+Enter fire
-    // nonsense. Coming from edit, the user may have already typed the change, so
-    // never overwrite that: only the source swaps.
-    if (state.mode !== 'edit') promptEl.value = '';
-
-    // Chaining matters: the source may itself be the output of an edit.
+    if (state.sources.length >= MAX_SOURCES) {
+      showError('That is already ' + MAX_SOURCES + ' photos', 'Remove one to add another.', 'warning');
+      return;
+    }
     var dataUri;
     try {
       dataUri = await toDataUri(image.src);
     } catch (err) {
-      showError('That image could not be loaded for editing',
-        'It may have been cleared from the server. Generate it again, or pick another frame.',
-        'danger');
+      showError('That image could not be loaded',
+        'It may have been cleared from the server. Generate it again, or pick another frame.', 'danger');
       return;
     }
-
-    state.sources = [{
-      dataUri: dataUri,
-      original: dataUri,
-      originalSize: image.bytes || 0,
-      name: imageFileName(run, image),
-      size: image.bytes || 0,
-      width: image.width || 0,
-      height: image.height || 0,
-      crop: null
-    }];
-    cropOpen = -1;
-    setMode('edit');
-    resetDropzone();
+    var wasEmpty = state.sources.length === 0;
+    // A prompt left over from generating this very image describes a picture,
+    // which is the wrong instruction for an edit. Anything else typed is kept.
+    if (wasEmpty && promptEl.value.trim() === String(run.prompt).trim()) { promptEl.value = ''; autosize(); }
+    addSources([{
+      dataUri: dataUri, original: dataUri, originalSize: image.bytes || 0, crop: null,
+      name: imageFileName(run, image), size: image.bytes || 0,
+      width: image.width || 0, height: image.height || 0
+    }]);
     clearError();
-    renderRail();
+    promptEl.focus();
+  }
+
+  // The photos an edit was made from. A run made in this tab still holds them;
+  // one restored from the server names the copies the server kept.
+  function sourceUrls(run) {
+    if (run.mode !== 'edit') return [];
+    if (run.sources && run.sources.length) return run.sources;
+    return (run.sourceIds || []).map(function (id) { return '/api/source/' + id; });
+  }
+
+  // As data URIs, which is what a request carries. Fetched once and kept.
+  async function sourceData(run) {
+    if (run.sources && run.sources.length) return run.sources;
+    if (!run.sourceIds || !run.sourceIds.length) return [];
+    var list = await Promise.all(run.sourceIds.map(function (id) { return toDataUri('/api/source/' + id); }));
+    run.sources = list;
+    return list;
+  }
+
+  // An edit can be repeated only while its photos still exist somewhere.
+  function canRunAgain(run) {
+    return run.mode !== 'edit' || sourceUrls(run).length > 0;
+  }
+
+  function photosGone() {
+    showError('The photos for that edit are no longer stored',
+      'They were cleared from the server to make room. Attach them again to repeat it.', 'warning');
+  }
+
+  // Again re-runs that run's stored settings, not the composer's current ones.
+  async function again(run) {
+    if (busy || !canRunAgain(run)) return;
+    closeLightbox();
+    var sources;
+    try { sources = await sourceData(run); } catch (err) { photosGone(); return; }
+    var settings = {
+      mode: run.mode, model: run.model, prompt: run.prompt, quality: run.quality,
+      shape: run.shape, resolution: run.resolution,
+      n: run.frames ? run.frames.length : run.n,
+      plan: run.plan || 'reference', sources: sources, ratio: run.ratio || null
+    };
+    var go = function () { submitRun(settings); };
+    if (settings.mode === 'edit' && settings.plan === 'reference' && sources.length > 1 && !likenessConsent) askConsent(go);
+    else go();
+  }
+
+  function reuseLabel(run) {
+    return run.mode === 'edit' && sourceUrls(run).length ? 'Reuse photos and prompt' : 'Reuse prompt';
+  }
+
+  function probe(dataUri, name) {
+    return new Promise(function (resolve) {
+      var size = Math.round((dataUri.length - dataUri.indexOf(',') - 1) * 0.75);
+      var im = new Image();
+      var done = function (w, h) {
+        resolve({ dataUri: dataUri, original: dataUri, originalSize: size, crop: null, name: name, size: size, width: w, height: h });
+      };
+      im.onload = function () { done(im.naturalWidth, im.naturalHeight); };
+      im.onerror = function () { done(0, 0); };
+      im.src = dataUri;
+    });
+  }
+
+  // Puts a past run back in the composer: its prompt, and for an edit its
+  // photos in their original order with the same combine-or-each choice, so it
+  // can be changed and run again without finding and attaching anything.
+  async function reuseRun(run) {
+    if (busy) return;
+    closeLightbox();
+    if (run.mode === 'edit' && sourceUrls(run).length) {
+      var list;
+      try { list = await sourceData(run); } catch (err) { photosGone(); return; }
+      var loaded = await Promise.all(list.map(function (uri, i) {
+        var ext = (/^data:image\/(\w+)/.exec(uri) || [0, 'png'])[1].replace('jpeg', 'jpg');
+        return probe(uri, (i === 0 ? 'base' : 'photo-' + (i + 1)) + '.' + ext);
+      }));
+      state.sources = [];
+      state.plan = run.plan === 'each' ? 'each' : 'reference';
+      openChip = -1;
+      addSources(loaded);
+      clearError();
+    }
+    promptEl.value = run.prompt;
+    autosize();
+    renderAction();
     promptEl.focus();
     promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
   }
 
-  // Again re-runs that group's stored settings, not the rail's current values.
-  function again(run) {
-    if (busy) return;
-    submitRun({
-      mode: run.mode,
-      model: run.model,
-      prompt: run.prompt,
-      quality: run.quality,
-      shape: run.shape,
-      resolution: run.resolution,
-      n: run.frames ? run.frames.length : run.n,
-      plan: run.plan || 'reference',
-      sources: run.sources || []
-    });
-  }
-
   // -------------------------------------------------------------------------
-  // 08 Lightbox
+  // Lightbox. Opens on an image, not a slot: a run can have gaps where frames
+  // failed, and the arrows move through what actually arrived.
   // -------------------------------------------------------------------------
-  // Opens on an image, not a slot: a run can have gaps where frames failed, and
-  // the arrows should move through what actually arrived.
   function openLightbox(run, image) {
     var list = doneImages(run);
     var pos = list.indexOf(image);
@@ -1858,138 +1670,196 @@
     document.addEventListener('keydown', lightboxKeys, true);
   }
 
+  function fact(label, value) {
+    if (value == null || value === '') return;
+    lbMeta.appendChild(el('dt', null, label));
+    lbMeta.appendChild(el('dd', null, String(value)));
+  }
+
+  function paintLbFav(image) {
+    var on = Boolean(image.favourite);
+    lbFav.hidden = lbDelete.hidden = !isStored(image);
+    lbFav.setAttribute('aria-pressed', String(on));
+    var label = on ? 'In your library — remove' : 'Add to library';
+    lbFav.setAttribute('aria-label', label);
+    lbFav.title = on ? 'In your library. Click to remove.' : 'Add to library — kept for good, never cleared to make room';
+  }
+
   function renderLightbox() {
     if (!lightboxState) return;
+    // A "for good?" asked about one picture must never carry over to the next.
+    if (typeof disarmLbDelete === 'function') disarmLbDelete();
     var run = lightboxState.run;
     var image = lightboxState.list[lightboxState.index];
     if (!image) return;
 
-    // Names the frame's own number against the run total, so a partial run reads
-    // truthfully — "Frame 5 of 6" even when only three came back.
+    // Names the frame's own number against the run total, so a partial run
+    // reads truthfully — "Frame 5 of 6" even when only three came back.
     lbCount.textContent = 'Frame ' + (image.frame || 1) + ' of ' + run.frames.length;
-    var p = priceEntry(run.model);
-    var meta = [p ? p.label : run.model];
-    if (run.quality && acceptsQuality(run.model)) {
-      meta.push(run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
-    }
-    // Real dimensions once the image has loaded; the rail estimate only until then.
-    if (image.width) meta.push(image.width + '×' + image.height);
-    else meta.push(sizeLabel(run.shape, run.resolution));
-    lbMeta.textContent = meta.join(' · ');
-
     lbImage.src = image.src;
     lbImage.alt = run.prompt;
     lbPrompt.textContent = image.revised_prompt || run.prompt;
-    lbTime.textContent = 'Generated ' + clockTime(new Date(run.finishedAt || run.startedAt)) + ' today';
+
+    // The photos it was made from, base first.
+    var photos = sourceUrls(run);
+    lbSourcesBlock.hidden = !photos.length;
+    lbSources.innerHTML = '';
+    if (photos.length) {
+      lbSourcesLabel.textContent = run.plan === 'each' && photos.length > 1
+        ? 'Photos edited in this run' : photos.length > 1 ? 'Made from these photos' : 'Made from this photo';
+      photos.forEach(function (u, i) {
+        var box = el('div', 'lb-source');
+        var t = document.createElement('img');
+        t.src = u;
+        t.alt = '';
+        box.appendChild(t);
+        if (photos.length > 1) box.appendChild(el('span', null, run.plan === 'each' ? String(i + 1) : i === 0 ? 'Base' : String(i + 1)));
+        lbSources.appendChild(box);
+      });
+    }
+
+    var p = priceEntry(run.model);
+    var made = new Date(run.finishedAt || run.startedAt);
+    var n = run.sourceCount || (run.sources ? run.sources.length : 0);
+    lbMeta.innerHTML = '';
+    fact('Model', p ? p.label : run.model);
+    if (run.quality && acceptsQuality(run.model)) fact('Quality', run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
+    fact('Kind', run.mode !== 'edit' ? 'Generated' : run.plan === 'reference' && n > 1 ? 'Combined from ' + n + ' photos'
+      : n > 1 ? 'One of ' + n + ' photos edited' : 'Edit of one photo');
+    fact('Size', image.width ? image.width + ' × ' + image.height : (run.resolution || '1k').toUpperCase());
+    if (run.shape && run.shape !== 'auto') fact('Shape', run.shape);
+    if (run.degraded) fact('Note', 'Optional settings were dropped');
+    var got = doneImages(run).length;
+    fact('Run', got === run.frames.length ? got + (got === 1 ? ' image' : ' images') : got + ' of ' + run.frames.length + ' images');
+    if (typeof run.cost === 'number' && run.cost > 0) fact('Run cost', (run.costEstimated ? '≈ ' : '') + money(run.cost));
+    fact('Made', dayLabel(made.getTime()) + ' at ' + clockTime(made) +
+      (run.restored || run.status === 'running' ? '' : ' · took ' + duration((run.finishedAt || Date.now()) - run.startedAt)));
+    if (run.user) fact('By', run.user);
+
+    lbReuse.textContent = reuseLabel(run);
+    lbAgain.hidden = !canRunAgain(run);
+    lbDownloadAll.hidden = got < 2;
+    lbDownloadAll.textContent = 'Download all ' + got;
+    lbEdit.title = 'Send this picture into the composer as a photo';
+    lbAgain.title = 'Repeat this run exactly as it was';
+    lbReuse.title = 'Put this back in the composer to change and run again';
+    paintLbFav(image);
+    var many = lightboxState.list.length > 1;
+    lbPrev.hidden = lbNext.hidden = !many;
+  }
+
+  function stepLightbox(step) {
+    if (!lightboxState) return;
+    var n = lightboxState.list.length;
+    lightboxState.index = (lightboxState.index + step + n) % n;
+    renderLightbox();
   }
 
   function closeLightbox() {
     if (lightbox.hidden) return;
     lightbox.hidden = true;
     document.removeEventListener('keydown', lightboxKeys, true);
+    var was = lightboxState;
     lightboxState = null;
-    // Focus returns to the image that opened it.
-    if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+    // Focus returns to the picture that was open. The frame may have been
+    // redrawn meanwhile (favouriting does that), so find it again by its place
+    // in the run rather than trusting the old element.
+    var back = lastFocused && document.contains(lastFocused) ? lastFocused : null;
+    if (!back && was) {
+      var image = was.list[was.index];
+      var at = was.run.frames.findIndex(function (f) { return f.image === image; });
+      back = results.querySelector('[data-frame-for="' + was.run.id + ':' + at + '"] .frame__button');
+    }
+    if (back) back.focus();
     lastFocused = null;
   }
 
+  function trapTab(e, container) {
+    var focusables = Array.prototype.slice.call(container.querySelectorAll('button:not([hidden]):not(:disabled)'));
+    if (!focusables.length) return;
+    var first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
   function lightboxKeys(e) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeLightbox();
-      return;
-    }
-    // Arrow keys move within the run.
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-      if (!lightboxState) return;
-      e.preventDefault();
-      var n = lightboxState.list.length;
-      var step = e.key === 'ArrowRight' ? 1 : -1;
-      lightboxState.index = (lightboxState.index + step + n) % n;
-      renderLightbox();
-      return;
-    }
-    if (e.key === 'Tab') {
-      // Trap focus inside the dialog.
-      var focusables = lightbox.querySelectorAll('button');
-      if (!focusables.length) return;
-      var first = focusables[0], last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
+    if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); return; }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); stepLightbox(e.key === 'ArrowRight' ? 1 : -1); return; }
+    if (e.key === 'Tab') trapTab(e, lightbox);
   }
 
   lbClose.addEventListener('click', closeLightbox);
+  lbPrev.addEventListener('click', function () { stepLightbox(-1); });
+  lbNext.addEventListener('click', function () { stepLightbox(1); });
   lightbox.addEventListener('mousedown', function (e) {
-    if (e.target === lightbox) closeLightbox();
+    if (e.target === lightbox || e.target.classList.contains('lightbox__stage')) closeLightbox();
   });
   lbDownload.addEventListener('click', function () {
     if (lightboxState) downloadImage(lightboxState.run, lightboxState.list[lightboxState.index]);
   });
   lbEdit.addEventListener('click', function () {
-    if (lightboxState) editThis(lightboxState.run, lightboxState.list[lightboxState.index]);
+    if (lightboxState) useAsReference(lightboxState.run, lightboxState.list[lightboxState.index]);
+  });
+  lbReuse.addEventListener('click', function () { if (lightboxState) reuseRun(lightboxState.run); });
+  lbAgain.addEventListener('click', function () { if (lightboxState) again(lightboxState.run); });
+  lbDownloadAll.addEventListener('click', function () { if (lightboxState) downloadRun(lightboxState.run); });
+  lbFav.addEventListener('click', async function () {
+    if (!lightboxState) return;
+    var run = lightboxState.run, image = lightboxState.list[lightboxState.index];
+    if (!(await toggleFavourite(image, !image.favourite))) return;
+    paintLbFav(image);
+    // The star on the frame behind, and the library wall, follow.
+    if (state.filter === 'fav') renderRuns();
+    else run.frames.forEach(function (f, i) { if (f.image === image) refreshFrame(run, i); });
+  });
+  function lbDeleteIdle() {
+    lbDelete.textContent = '';
+    lbDelete.appendChild(icon('trash', 16));
+    lbDelete.title = 'Delete';
+  }
+  lbDeleteIdle();
+  var disarmLbDelete = armConfirm(lbDelete, lbDeleteIdle, 'Delete for good?', function () {
+    if (!lightboxState) return;
+    var image = lightboxState.list[lightboxState.index];
+    closeLightbox();
+    deleteImages([image.id]);
   });
 
   // -------------------------------------------------------------------------
   // Submitting a run
   // -------------------------------------------------------------------------
   function currentSettings() {
-    var editing = state.mode === 'edit';
+    var base = state.sources[0];
+    var shape = currentShape();
     return {
-      mode: state.mode,
+      mode: mode(),
       model: state.model,
       prompt: promptEl.value.trim(),
       quality: acceptsQuality(state.model) ? state.quality : null,
-      shape: currentShape(),
+      shape: shape,
       resolution: currentResolution(),
       n: currentCount(),
-      // One photo is a reference edit of one — the same request shape, with
-      // the singular field chosen by the server.
+      // One photo is a combined edit of one — the same request shape, with the
+      // singular field chosen by the server.
       plan: isEditEach() ? 'each' : 'reference',
-      sources: editing ? state.sources.map(function (s) { return s.dataUri; }) : []
+      sources: state.sources.map(function (s) { return s.dataUri; }),
+      // On an edit left at "as base" the result takes the first photo's shape,
+      // so the placeholder can be drawn to it and nothing jumps on arrival.
+      ratio: aspectRatioCss(shape) || (base && base.width && !isEditEach() ? base.width + ' / ' + base.height : null)
     };
   }
 
   function setBusy(on, label) {
     busy = on;
-    modeswitch.classList.toggle('is-disabled', on);
-    tabGenerate.disabled = on;
-    tabEdit.disabled = on;
-    planReference.disabled = on;
-    planEach.disabled = on;
-    consentBox.disabled = on;
     promptEl.disabled = on;
-    modelEl.disabled = on;
-    qualityEl.disabled = on;
-    shapeEl.disabled = on;
-    sizeEl.disabled = on;
-    framesEl.disabled = on;
-    dropzone.disabled = on;
-
+    [modelEl, qualityEl, shapeEl, sizeEl].forEach(function (s) { s.disabled = on; });
     actionBtn.disabled = on;
     actionBtn.classList.toggle('is-busy', on);
-    // Re-render the photo rows so their Remove buttons follow the busy state —
-    // pulling a source out from under a run in flight would strand it.
-    renderSource();
-    if (on) {
-      setBusyLabel(label);
-      actionReason.hidden = true;
-      costLine.hidden = false;
-      costLabel.textContent = state.mode === 'edit' ? 'Charged as images arrive' : 'Charged as frames arrive';
-      var est = estimate();
-      costValue.textContent = est ? money(est.total) : 'unknown';
-      promptGuidance.textContent = 'Locked while a run is in flight.';
-      cancelRow.hidden = false;
-    } else {
-      cancelRow.hidden = true;
-      renderModeChrome();
-      renderAction();
-    }
+    cancelBtn.hidden = !on;
+    if (on) { openChip = -1; closeMention(); setBusyLabel(label); }
+    // Re-render the chips and pills so their controls follow the busy state —
+    // pulling a photo out from under a run in flight would strand it.
+    renderRail();
   }
 
   function setBusyLabel(label) {
@@ -2001,47 +1871,39 @@
   // Frames are requested one at a time, so the button can name the one being
   // worked on rather than the batch.
   function busyLabelFor(run) {
-    var got = doneImages(run).length;
     var total = run.frames.length;
-    var at = Math.min(got + 1, total);
+    var at = Math.min(doneImages(run).length + 1, total);
     if (run.mode === 'edit') {
-      if (run.plan === 'each' && total > 1) return 'Editing photo ' + at + ' of ' + total;
-      var combining = run.plan === 'reference' && run.sources && run.sources.length > 1;
-      if (total === 1) return combining ? 'Combining the photos' : 'Applying the edit';
-      return (combining ? 'Combining, variant ' : 'Variant ') + at + ' of ' + total;
+      if (run.plan === 'each' && total > 1) return 'Editing ' + at + ' of ' + total;
+      var combining = run.sources && run.sources.length > 1;
+      if (total === 1) return combining ? 'Combining' : 'Applying edit';
+      return 'Variant ' + at + ' of ' + total;
     }
-    return 'Generating frame ' + at + ' of ' + total;
+    return total === 1 ? 'Generating' : 'Frame ' + at + ' of ' + total;
   }
 
   // Ask xAI for one image per request rather than one request for many.
   //
-  // Inside a single request xAI works through `n` images one after another, so a
-  // six-frame batch takes six times as long as one and shows nothing until the
-  // last is done — and at 2k a full batch runs past the server's timeout, losing
-  // work that has almost certainly already been billed. One image per request
-  // keeps every call short, lets frames appear as they land, and confines a
-  // failure to the frame it happened to.
+  // Inside a single request xAI works through `n` images one after another, so
+  // a six-frame batch shows nothing until the last is done — and at 2k a full
+  // batch runs past the server's timeout, losing work that has almost certainly
+  // been billed. One image per request keeps every call short, lets frames
+  // appear as they land, and confines a failure to the frame it happened to.
   var FRAME_CONCURRENCY = 3;
 
   function requestOneFrame(run, index) {
     // The body is built in request-body.js, shared with the tests, so what is
-    // sent for one photo, several photos combined, or several edited apart is
-    // checked without a browser. The server maps `sources` onto xAI's singular
-    // or plural field.
+    // sent for one photo, several combined, or several edited apart is checked
+    // without a browser.
     var body = window.ImagineRequest.buildFrameBody(run, index, {
       user: state.name || '',
       consent: likenessConsent
     });
-
-    var headers = { 'content-type': 'application/json' };
-    if (password) headers['x-team-password'] = password;
-
     var controller = new AbortController();
     run.controllers.push(controller);
-
     return fetch('/api/images', {
       method: 'POST',
-      headers: headers,
+      headers: authHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify(body),
       signal: controller.signal
     }).then(function (res) {
@@ -2066,18 +1928,18 @@
       if (payload && payload.code === 'rate_limited') run.rateLimit = payload.retryAfter || 30;
       var described = describeFailure(payload, result.status);
       frame.status = 'failed';
-      // Two lines everywhere else; inside a frame card there is only room for one.
-      frame.error = described[1] + '. Use Again to retry just this one.';
+      // Two lines everywhere else; inside a frame there is only room for one.
+      frame.error = described[1] + '.';
       run.lastFailure = described;
       refreshFrame(run, index);
-      refreshRunHeader(run);
+      refreshRunCaption(run);
       return;
     }
 
     var item = (result.payload.images || [])[0];
     if (!item) {
       frame.status = 'failed';
-      frame.error = 'Nothing came back for this frame. Use Again to retry just this one.';
+      frame.error = 'Nothing came back for this frame.';
       refreshFrame(run, index);
       return;
     }
@@ -2089,11 +1951,9 @@
         : (item.b64 ? 'data:' + kind.mime + ';base64,' + item.b64 : item.url),
       ext: kind.ext,
       bytes: item.b64 ? Math.round(item.b64.length * 0.75) : 0,
-      // Filled in from the image itself once it loads — the only truthful
-      // source for the dimensions xAI actually produced.
-      width: 0,
-      height: 0,
+      width: 0, height: 0,    // filled in from the image itself once it loads
       frame: index + 1,
+      favourite: false,
       revised_prompt: item.revised_prompt || null
     };
     frame.status = 'done';
@@ -2108,27 +1968,23 @@
     if (result.payload.degraded) run.degraded = true;
 
     refreshFrame(run, index);
-    refreshRunHeader(run);
+    refreshRunCaption(run);
     if (busy) setBusyLabel(busyLabelFor(run));
   }
 
   function cancelRun(run) {
     if (!run || run.status !== 'running') return;
     run.cancelled = true;
-    run.frames.forEach(function (f) {
-      if (f.status === 'queued') f.status = 'cancelled';
-    });
-    run.controllers.forEach(function (c) {
-      try { c.abort(); } catch (err) { /* already settled */ }
-    });
+    run.frames.forEach(function (f) { if (f.status === 'queued') f.status = 'cancelled'; });
+    run.controllers.forEach(function (c) { try { c.abort(); } catch (err) { /* already settled */ } });
   }
 
   async function submitRun(settings) {
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
 
-    // Editing each of several photos is one request per photo; everything
-    // else — generation, one photo, photos combined — is one per frame asked for.
+    // Editing each of several photos is one request per photo; everything else
+    // — generation, one photo, photos combined — is one per frame asked for.
     var total = settings.mode === 'edit' && settings.plan === 'each'
       ? Math.max(1, settings.sources.length)
       : Math.max(1, settings.n || 1);
@@ -2137,30 +1993,21 @@
 
     var run = {
       id: 'run-' + (++seq) + '-' + Date.now().toString(36),
-      mode: settings.mode,
-      model: settings.model,
-      prompt: settings.prompt,
-      quality: settings.quality,
-      shape: settings.shape,
-      resolution: settings.resolution,
-      n: total,
-      plan: settings.plan || 'reference',
-      sources: settings.sources || [],
-      frames: frames,
-      controllers: [],
-      status: 'running',
-      startedAt: Date.now(),
-      finishedAt: null,
-      cost: 0,
-      costEstimated: false,
-      counted: false,
-      cancelled: false,
-      degraded: false
+      mode: settings.mode, model: settings.model, prompt: settings.prompt,
+      quality: settings.quality, shape: settings.shape, resolution: settings.resolution,
+      n: total, plan: settings.plan || 'reference', sources: settings.sources || [],
+      ratio: settings.ratio || null, user: state.name.trim() || null,
+      frames: frames, controllers: [], status: 'running',
+      startedAt: Date.now(), finishedAt: null,
+      cost: 0, costEstimated: false, counted: false, cancelled: false, degraded: false
     };
 
     clearError();
+    // A new run is always shown, whatever the gallery was filtered to.
+    if (state.filter !== 'all' && !(state.filter === 'mine' && run.user)) setFilter('all');
     runs.unshift(run);
     renderRuns();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
     if (runTimer) clearInterval(runTimer);
     runTimer = setInterval(tickElapsed, 1000);
 
@@ -2178,14 +2025,13 @@
         frame.status = 'running';
         refreshFrame(run, index);
         try {
-          var result = await requestOneFrame(run, index);
-          applyFrameResult(run, index, result);
+          applyFrameResult(run, index, await requestOneFrame(run, index));
         } catch (err) {
           if (run.cancelled || (err && err.name === 'AbortError')) {
             frame.status = 'cancelled';
           } else {
             frame.status = 'failed';
-            frame.error = 'Could not reach the studio server. Use Again to retry just this one.';
+            frame.error = 'Could not reach the studio server.';
             run.reachFailed = true;
           }
           refreshFrame(run, index);
@@ -2204,6 +2050,7 @@
       activeRun = null;
       // Restore the button in a finally, so a failure never leaves it stuck.
       setBusy(false);
+      refreshBalance();
       if (runTimer && !runs.some(function (r) { return r.status === 'running'; })) {
         clearInterval(runTimer);
         runTimer = null;
@@ -2212,16 +2059,15 @@
 
     var got = doneImages(run).length;
 
-    // Every frame failed: there is nothing to show, so the card goes and the
-    // error takes the rail as before.
+    // Every frame failed: there is nothing to show, so the row goes and the
+    // error sits above the composer.
     if (got === 0 && !run.cancelled) {
       runs = runs.filter(function (r) { return r !== run; });
       renderRuns();
       if (run.authFailed) { lockOut(); return; }
       if (run.reachFailed) {
         showError('Could not reach the studio server',
-          'The request to this app’s own server failed. Check the server is still running, then retry. Nothing was charged.',
-          'danger');
+          'The request to this app’s own server failed. Check the server is still running, then retry. Nothing was charged.', 'danger');
       } else if (run.lastFailure) {
         showError(run.lastFailure[1], run.lastFailure[2], run.lastFailure[0]);
       }
@@ -2240,16 +2086,13 @@
         'warning');
       return;
     }
-
     if (got < run.frames.length) {
       showError('Some frames did not arrive',
-        got + ' of ' + run.frames.length + ' came back and are in the run above. Use Again on a failed frame to retry just that one. You were charged ' +
-        money(run.cost) + ' for what arrived.',
-        'warning');
+        got + ' of ' + run.frames.length + ' came back. Use Try again on a failed frame to retry just that one. You were charged ' +
+        money(run.cost) + ' for what arrived.', 'warning');
       if (run.rateLimit) startRateLimit(run.rateLimit);
       return;
     }
-
     if (run.degraded) {
       showError('Run completed with fewer settings',
         'xAI would not accept one of the optional settings, so it was retried with just the prompt. Shape, size and quality were dropped for this run.',
@@ -2257,12 +2100,11 @@
     }
   }
 
-  // Retry one failed frame in place, without re-running the whole group.
+  // Retry one failed frame in place, without re-running the whole run.
   async function retryFrame(run, index) {
     if (busy) return;
     var frame = run.frames[index];
     if (!frame || frame.status === 'done') return;
-
     run.controllers = [];
     run.cancelled = false;
     run.status = 'running';
@@ -2273,11 +2115,10 @@
     activeRun = run;
     setBusy(true, 'Retrying frame ' + (index + 1));
     try {
-      var result = await requestOneFrame(run, index);
-      applyFrameResult(run, index, result);
+      applyFrameResult(run, index, await requestOneFrame(run, index));
     } catch (err) {
       frame.status = 'failed';
-      frame.error = 'Could not reach the studio server. Use Again to retry just this one.';
+      frame.error = 'Could not reach the studio server.';
       refreshFrame(run, index);
     } finally {
       run.status = 'done';
@@ -2289,64 +2130,71 @@
   }
 
   // -------------------------------------------------------------------------
-  // Mode switching. Switching keeps the prompt text and the loaded photo, so a
-  // mis-click costs nothing.
+  // Likeness permission. Combining photos carries a real person's face into
+  // another picture, so it is confirmed once a session, before the first such
+  // run. The server refuses a combined edit that does not carry it.
   // -------------------------------------------------------------------------
-  function setMode(mode) {
-    if (busy) return;
-    state.mode = mode === 'edit' ? 'edit' : 'generate';
-    renderRail();
+  var consentThen = null;
+
+  function askConsent(then) {
+    consentThen = then;
+    lastFocused = document.activeElement;
+    consentDialog.hidden = false;
+    consentCancel.focus();
+    document.addEventListener('keydown', consentKeys, true);
   }
 
-  [tabGenerate, tabEdit].forEach(function (tab) {
-    tab.addEventListener('click', function () { setMode(tab.dataset.mode); });
+  function closeConsent(agreed) {
+    consentDialog.hidden = true;
+    document.removeEventListener('keydown', consentKeys, true);
+    var then = consentThen;
+    consentThen = null;
+    if (agreed) { likenessConsent = true; if (then) then(); return; }
+    if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+  }
+
+  function consentKeys(e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeConsent(false); }
+    else if (e.key === 'Tab') trapTab(e, consentDialog);
+  }
+
+  consentOk.addEventListener('click', function () { closeConsent(true); });
+  consentCancel.addEventListener('click', function () { closeConsent(false); });
+  consentDialog.addEventListener('mousedown', function (e) { if (e.target === consentDialog) closeConsent(false); });
+
+  rail.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (busy || Date.now() < rateLimitUntil || !config || !config.hasKey) return;
+    var reason = blockingReason();
+    if (reason) {
+      // The button is never silently dead: say what is missing, in place.
+      attention = reason;
+      renderAction();
+      promptEl.focus();
+      return;
+    }
+    var settings = currentSettings();
+    var go = function () { submitRun(settings); };
+    if (settings.mode === 'edit' && settings.plan === 'reference' && settings.sources.length > 1 && !likenessConsent) {
+      askConsent(go);
+      return;
+    }
+    go();
   });
 
-  modeswitch.addEventListener('keydown', function (e) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    var next = state.mode === 'generate' ? 'edit' : 'generate';
-    setMode(next);
-    (next === 'edit' ? tabEdit : tabGenerate).focus();
+  // Ctrl/Cmd + Enter fires the button from anywhere in the composer.
+  rail.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!actionBtn.disabled) rail.requestSubmit();
+    }
   });
+
+  cancelBtn.addEventListener('click', function () { if (activeRun) cancelRun(activeRun); });
 
   // -------------------------------------------------------------------------
-  // Dropzone. Keyboard operable: it is a real button, and the hidden file input
-  // is driven from it.
+  // Adding photos: the + tile, a drop anywhere on the page, or a paste
   // -------------------------------------------------------------------------
-  dropzone.addEventListener('click', function () { fileInput.click(); });
-
-  ['dragenter', 'dragover'].forEach(function (type) {
-    dropzone.addEventListener(type, function (e) {
-      e.preventDefault();
-      dropzone.classList.remove('is-rejected');
-      dropzone.classList.add('is-over');
-      dropzoneTitle.textContent = 'Release to add';
-      dropzoneBody.textContent = 'JPG, PNG or WebP, up to 10 MB each.';
-    });
-  });
-
-  ['dragleave', 'dragend'].forEach(function (type) {
-    dropzone.addEventListener(type, function (e) {
-      e.preventDefault();
-      if (!dropzone.classList.contains('is-rejected')) resetDropzone();
-    });
-  });
-
-  dropzone.addEventListener('drop', function (e) {
-    e.preventDefault();
-    dropzone.classList.remove('is-over');
-    var files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) takeFiles(files);
-  });
-
-  fileInput.addEventListener('change', function () {
-    if (fileInput.files && fileInput.files.length) takeFiles(fileInput.files);
-    fileInput.value = '';
-  });
-
-  // Removal is per row, wired in renderSource where each row is built.
-
   function fileKind(file) {
     if (file.type && file.type.indexOf('image/') === 0) return file.type.split('/')[1].toUpperCase();
     if (file.type) return file.type.split('/').pop().toUpperCase();
@@ -2354,24 +2202,18 @@
     return dot === -1 ? 'file' : file.name.slice(dot + 1).toUpperCase();
   }
 
-  // The same cap as frames: ten edits in one run, ten frames in one run.
-  var MAX_SOURCES = 10;
-
   function readOneFile(file) {
     return new Promise(function (resolve) {
       var reader = new FileReader();
       reader.onload = function () {
         var dataUri = String(reader.result);
         var probe = new Image();
-        probe.onload = function () {
+        var done = function (w, h) {
           resolve({ dataUri: dataUri, original: dataUri, originalSize: file.size, crop: null,
-                    name: file.name, size: file.size,
-                    width: probe.naturalWidth, height: probe.naturalHeight });
+                    name: file.name || 'pasted image', size: file.size, width: w, height: h });
         };
-        probe.onerror = function () {
-          resolve({ dataUri: dataUri, original: dataUri, originalSize: file.size, crop: null,
-                    name: file.name, size: file.size, width: 0, height: 0 });
-        };
+        probe.onload = function () { done(probe.naturalWidth, probe.naturalHeight); };
+        probe.onerror = function () { done(0, 0); };
         probe.src = dataUri;
       };
       reader.onerror = function () { resolve(null); };
@@ -2379,63 +2221,218 @@
     });
   }
 
-  // Takes whatever was dropped or chosen, keeps the usable photos and explains
-  // the first thing it had to turn away. Already-loaded photos are never lost to
-  // a bad file in the same batch.
-  async function takeFiles(fileList) {
-    var files = Array.prototype.slice.call(fileList);
-    if (!files.length) return;
-
-    var room = MAX_SOURCES - state.sources.length;
-    var rejected = null;
-
-    if (room <= 0) {
-      rejectDrop('That is already ' + MAX_SOURCES + ' photos',
-        'Ten is the most in one run. Remove one to add another, or edit these first.');
-      return;
+  // The moment a second photo lands, the settings that transferred a likeness
+  // best become the defaults: Imagine 2.0 at 2K. Only on that crossing — a
+  // choice made afterwards stands.
+  function adoptReferenceDefaults() {
+    var prices = config && config.prices ? config.prices : {};
+    var preferred = 'grok-imagine-image-2.0';
+    if (prices[preferred] && !modelIsRetired(preferred)) {
+      state.model = preferred;
+      retiredFallback = null;
+      buildModelOptions();
     }
+    state.editResolution = '2k';
+  }
 
-    var accepted = [];
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      if (ACCEPTED_TYPES.indexOf(f.type) === -1) {
-        rejected = rejected || ['That file is a ' + fileKind(f),
-          'Editing needs an image. Drop a JPG, PNG or WebP instead.'];
-        continue;
-      }
-      if (f.size > MAX_UPLOAD_BYTES) {
-        rejected = rejected || ['That photo is ' + bytes(f.size),
-          'The limit is 10 MB. Export it smaller, or scale it to 2048px on the long edge and drop it again.'];
-        continue;
-      }
-      if (accepted.length >= room) {
-        rejected = rejected || ['That is more than ' + MAX_SOURCES + ' photos',
-          'Ten is the most in one run, so the rest were left out.'];
-        continue;
-      }
-      accepted.push(f);
-    }
-
+  function addSources(list) {
     var before = state.sources.length;
-    var loaded = await Promise.all(accepted.map(readOneFile));
-    loaded.forEach(function (src) { if (src) state.sources.push(src); });
+    list.forEach(function (src) { if (src && state.sources.length < MAX_SOURCES) state.sources.push(src); });
     if (before < 2 && state.sources.length >= 2 && state.plan === 'reference') adoptReferenceDefaults();
-
-    if (loaded.some(function (s) { return !s; }) && !rejected) {
-      rejected = ['A photo could not be read',
-        'The file may be damaged. Try exporting it again, then drop it here.'];
-    }
-
-    if (rejected) rejectDrop(rejected[0], rejected[1]);
-    else { resetDropzone(); clearError(); }
     renderRail();
   }
 
+  // Takes whatever was dropped, chosen or pasted, keeps the usable photos and
+  // explains the first thing it had to turn away. Already-attached photos are
+  // never lost to a bad file in the same batch.
+  async function takeFiles(fileList) {
+    if (busy) return;
+    var files = Array.prototype.slice.call(fileList);
+    if (!files.length) return;
+    var room = MAX_SOURCES - state.sources.length;
+    var rejected = null;
+    if (room <= 0) {
+      showError('That is already ' + MAX_SOURCES + ' photos',
+        'Ten is the most in one run. Remove one to add another, or run these first.', 'warning');
+      return;
+    }
+    var accepted = [];
+    files.forEach(function (f) {
+      if (ACCEPTED_TYPES.indexOf(f.type) === -1) {
+        rejected = rejected || ['That file is a ' + fileKind(f), 'Photos need to be JPG, PNG or WebP.'];
+      } else if (f.size > MAX_UPLOAD_BYTES) {
+        rejected = rejected || ['That photo is ' + bytes(f.size),
+          'The limit is 10 MB. Export it smaller, or scale it to 2048px on the long edge and add it again.'];
+      } else if (accepted.length >= room) {
+        rejected = rejected || ['That is more than ' + MAX_SOURCES + ' photos', 'Ten is the most in one run, so the rest were left out.'];
+      } else accepted.push(f);
+    });
+
+    var loaded = await Promise.all(accepted.map(readOneFile));
+    if (loaded.some(function (s) { return !s; }) && !rejected) {
+      rejected = ['A photo could not be read', 'The file may be damaged. Try exporting it again, then add it here.'];
+    }
+    addSources(loaded.filter(Boolean));
+    if (rejected) showError(rejected[0], rejected[1], 'warning'); else clearError();
+    promptEl.focus();
+  }
+
+  addBtn.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () {
+    if (fileInput.files && fileInput.files.length) takeFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  function dragHasFiles(e) {
+    var t = e.dataTransfer && e.dataTransfer.types;
+    return Boolean(t) && Array.prototype.indexOf.call(t, 'Files') !== -1;
+  }
+  var dragDepth = 0;
+  window.addEventListener('dragenter', function (e) {
+    if (!dragHasFiles(e) || app.hidden || busy) return;
+    e.preventDefault();
+    dragDepth++;
+    dropveil.hidden = false;
+    rail.classList.add('is-over');
+  });
+  window.addEventListener('dragover', function (e) { if (dragHasFiles(e) && !app.hidden) e.preventDefault(); });
+  function endDrag() { dragDepth = 0; dropveil.hidden = true; rail.classList.remove('is-over'); }
+  window.addEventListener('dragleave', function (e) {
+    if (!dragHasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) endDrag();
+  });
+  window.addEventListener('drop', function (e) {
+    if (!dragHasFiles(e) || app.hidden) return;
+    e.preventDefault();
+    endDrag();
+    if (e.dataTransfer.files && e.dataTransfer.files.length) takeFiles(e.dataTransfer.files);
+  });
+
+  // A pasted screenshot or copied image is a photo like any other. Pasted text
+  // is left alone to land in whatever field has the caret.
+  document.addEventListener('paste', function (e) {
+    if (app.hidden || !e.clipboardData) return;
+    var files = Array.prototype.filter.call(e.clipboardData.files || [], function (f) {
+      return f.type && f.type.indexOf('image/') === 0;
+    });
+    if (!files.length) return;
+    e.preventDefault();
+    takeFiles(files);
+  });
+
   // -------------------------------------------------------------------------
-  // Rail wiring
+  // Two or more photos: combine into one, or edit each
+  // -------------------------------------------------------------------------
+  function setPlan(plan) {
+    if (busy) return;
+    state.plan = plan === 'each' ? 'each' : 'reference';
+    openChip = -1;
+    renderRail();
+  }
+  [planReference, planEach].forEach(function (btn) {
+    btn.addEventListener('click', function () { setPlan(btn.dataset.plan); btn.focus(); });
+  });
+  planSwitch.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    var next = state.plan === 'reference' ? 'each' : 'reference';
+    setPlan(next);
+    (next === 'reference' ? planReference : planEach).focus();
+  });
+
+  // -------------------------------------------------------------------------
+  // @ in the prompt offers the attached photos. It inserts plain words —
+  // "photo 2" — because that is what the model reads.
+  // -------------------------------------------------------------------------
+  function closeMention() {
+    mention = null;
+    mentionMenu.hidden = true;
+    mentionMenu.innerHTML = '';
+    promptEl.removeAttribute('aria-activedescendant');
+  }
+
+  function updateMention() {
+    if (busy || !state.sources.length) { closeMention(); return; }
+    var caret = promptEl.selectionStart;
+    var m = /(^|\s)@([\w ]{0,8})$/.exec(promptEl.value.slice(0, caret));
+    if (!m) { closeMention(); return; }
+    var typed = m[2].toLowerCase().replace(/\s+/g, ' ');
+    var items = state.sources.map(function (src, i) {
+      return { index: i, word: 'photo ' + (i + 1), src: src };
+    }).filter(function (it) {
+      return !typed || it.word.indexOf(typed) === 0 || String(it.index + 1) === typed.trim();
+    });
+    if (!items.length) { closeMention(); return; }
+    mention = { start: caret - m[2].length - 1, items: items, index: Math.min(mention ? mention.index : 0, items.length - 1) };
+    openChip = -1;
+    renderChipPanel();
+    renderSource();
+    paintMention();
+  }
+
+  function paintMention() {
+    mentionMenu.innerHTML = '';
+    mentionMenu.hidden = false;
+    mention.items.forEach(function (it, n) {
+      var row = el('button', 'mention');
+      row.type = 'button';
+      row.id = 'mention-' + n;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(n === mention.index));
+      row.tabIndex = -1;
+      var img = document.createElement('img');
+      img.src = it.src.dataUri;
+      img.alt = '';
+      row.appendChild(img);
+      row.appendChild(el('span', null, it.word));
+      if (isReference() && it.index === 0) row.appendChild(el('span', 'mention__sub', 'the base'));
+      // mousedown, not click: the textarea must not lose its caret first.
+      row.addEventListener('mousedown', function (e) { e.preventDefault(); pickMention(n); });
+      mentionMenu.appendChild(row);
+    });
+    promptEl.setAttribute('aria-activedescendant', 'mention-' + mention.index);
+  }
+
+  function pickMention(n) {
+    if (!mention) return;
+    var it = mention.items[n];
+    var caret = promptEl.selectionStart;
+    var before = promptEl.value.slice(0, mention.start), after = promptEl.value.slice(caret);
+    var insert = it.word + (/^\s/.test(after) ? '' : ' ');
+    promptEl.value = before + insert + after;
+    var pos = (before + insert).length;
+    closeMention();
+    promptEl.focus();
+    promptEl.setSelectionRange(pos, pos);
+    autosize();
+    renderAction();
+  }
+
+  promptEl.addEventListener('keydown', function (e) {
+    if (!mention) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      var n = mention.items.length;
+      mention.index = (mention.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+      paintMention();
+    } else if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') {
+      e.preventDefault();
+      pickMention(mention.index);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMention();
+    }
+  });
+  promptEl.addEventListener('blur', function () { setTimeout(closeMention, 120); });
+  promptEl.addEventListener('click', updateMention);
+
+  // -------------------------------------------------------------------------
+  // Composer wiring
   // -------------------------------------------------------------------------
   promptEl.addEventListener('input', function () {
-    promptCount.textContent = promptEl.value.length + ' / 1000';
+    autosize();
+    updateMention();
     renderAction();
   });
 
@@ -2446,81 +2443,122 @@
     buildModelOptions();
     renderRail();
   });
-
-  qualityEl.addEventListener('change', function () {
-    state.quality = qualityEl.value;
-    renderRail();
-  });
-
+  qualityEl.addEventListener('change', function () { state.quality = qualityEl.value; renderRail(); });
   shapeEl.addEventListener('change', function () {
-    if (state.mode === 'edit') state.editShape = shapeEl.value; else state.shape = shapeEl.value;
+    if (mode() === 'edit') state.editShape = shapeEl.value; else state.shape = shapeEl.value;
     renderRail();
   });
-
   sizeEl.addEventListener('change', function () {
-    if (state.mode === 'edit') state.editResolution = sizeEl.value; else state.resolution = sizeEl.value;
+    if (mode() === 'edit') state.editResolution = sizeEl.value; else state.resolution = sizeEl.value;
     renderRail();
   });
 
   function setCount(n) {
     n = Math.min(maxCount(), Math.max(1, n));
-    if (state.mode === 'edit') state.variants = n; else state.frames = n;
+    if (mode() === 'edit') state.variants = n; else state.frames = n;
     renderRail();
   }
-
-  framesEl.addEventListener('input', function () {
-    setCount(Number(framesEl.value));
-  });
-
-  // Shift+arrows step 5 on the slider.
-  framesEl.addEventListener('keydown', function (e) {
-    if (!e.shiftKey) return;
-    var step = 0;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') step = 5;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') step = -5;
-    if (!step) return;
-    e.preventDefault();
-    setCount(currentCount() + step);
-  });
-
-  function syncName(value) {
-    state.name = value;
-    if (userName.value !== value) userName.value = value;
-    if (userNameMobile.value !== value) userNameMobile.value = value;
-    persist();
-  }
-  userName.addEventListener('input', function () { syncName(userName.value); });
-  userNameMobile.addEventListener('input', function () { syncName(userNameMobile.value); });
+  framesMinus.addEventListener('click', function () { setCount(currentCount() - 1); if (framesMinus.disabled) framesPlus.focus(); });
+  framesPlus.addEventListener('click', function () { setCount(currentCount() + 1); if (framesPlus.disabled) framesMinus.focus(); });
 
   Array.prototype.slice.call(document.querySelectorAll('.seed')).forEach(function (btn) {
     btn.addEventListener('click', function () {
       promptEl.value = btn.dataset.seed;
-      promptCount.textContent = promptEl.value.length + ' / 1000';
+      autosize();
       renderAction();
       promptEl.focus();
       promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
     });
   });
 
-  cancelBtn.addEventListener('click', function () {
-    if (activeRun) cancelRun(activeRun);
+  // Escape closes whichever panel is open above the composer.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !lightbox.hidden || !consentDialog.hidden) return;
+    if (openChip >= 0) { e.preventDefault(); closeChipPanel(true); }
+    else if (!whoPop.hidden) { e.preventDefault(); closeWho(true); }
   });
 
-  rail.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    if (blockingReason() || busy || Date.now() < rateLimitUntil) return;
+  // A narrower window wraps the prompt differently; measure it again.
+  window.addEventListener('resize', autosize);
 
-    var settings = currentSettings();
-    submitRun(settings);
-  });
+  // The gallery keeps clear of the dock, however tall it has grown.
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () {
+      document.documentElement.style.setProperty('--dock-h', dock.offsetHeight + 'px');
+    }).observe(dock);
+  }
 
-  // Cmd/Ctrl + Enter fires the action button from anywhere in the rail.
-  rail.addEventListener('keydown', function (e) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+  // -------------------------------------------------------------------------
+  // Top bar: filters, name, appearance
+  // -------------------------------------------------------------------------
+  function setFilter(f) {
+    state.filter = f === 'fav' || f === 'mine' ? f : 'all';
+    Array.prototype.slice.call(filtersEl.querySelectorAll('.seg__btn')).forEach(function (b) {
+      var on = b.dataset.filter === state.filter;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+    persist();
+    renderRuns();
+    if (state.filter === 'fav' && !libraryLoaded) loadLibrary();
+  }
+
+  function wireRadioKeys(group, attr, apply) {
+    group.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       e.preventDefault();
-      if (!actionBtn.disabled) rail.requestSubmit();
-    }
+      var btns = Array.prototype.slice.call(group.querySelectorAll('.seg__btn'));
+      var at = btns.findIndex(function (b) { return b.getAttribute('aria-checked') === 'true'; });
+      var next = btns[(at + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length];
+      apply(next.dataset[attr]);
+      next.focus();
+    });
+    Array.prototype.slice.call(group.querySelectorAll('.seg__btn')).forEach(function (b) {
+      b.addEventListener('click', function () { apply(b.dataset[attr]); });
+    });
+  }
+  wireRadioKeys(filtersEl, 'filter', setFilter);
+
+  function setTheme(t) {
+    var theme = t === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    writeStore(THEME_KEY, theme);
+    Array.prototype.slice.call(themeEl.querySelectorAll('.seg__btn')).forEach(function (b) {
+      var on = b.dataset.themeChoice === theme;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+  wireRadioKeys(themeEl, 'themeChoice', setTheme);
+
+  function renderAvatar() {
+    whoBtn.innerHTML = '';
+    var ini = initials(state.name);
+    if (ini) whoBtn.textContent = ini; else whoBtn.appendChild(icon('user', 16));
+    whoBtn.title = state.name.trim() ? 'Working as ' + state.name.trim() : 'Add your name';
+  }
+
+  function closeWho(refocus) {
+    whoPop.hidden = true;
+    whoBtn.setAttribute('aria-expanded', 'false');
+    if (refocus) whoBtn.focus();
+  }
+  whoBtn.addEventListener('click', function () {
+    var open = whoPop.hidden;
+    whoPop.hidden = !open;
+    whoBtn.setAttribute('aria-expanded', String(open));
+    if (open) userName.focus();
   });
+  document.addEventListener('mousedown', function (e) {
+    if (!whoPop.hidden && !whoPop.contains(e.target) && !whoBtn.contains(e.target)) closeWho(false);
+  });
+  userName.addEventListener('input', function () {
+    state.name = userName.value;
+    renderAvatar();
+    persist();
+    if (state.filter === 'mine') renderRuns();
+  });
+  userName.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); closeWho(true); } });
 
   // The retirement count is re-read on window focus, never left stale.
   window.addEventListener('focus', function () {
@@ -2528,15 +2566,8 @@
     buildModelOptions();
     renderRetirement();
     renderSpend();
+    refreshBalance();
   });
-
-  // On phones the name field moves to the bottom of the rail.
-  var narrow = window.matchMedia('(max-width: 560px)');
-  function placeNameField() {
-    mobileWho.hidden = !narrow.matches;
-    document.body.classList.toggle('has-pinned-action', narrow.matches);
-  }
-  narrow.addEventListener('change', placeNameField);
 
   // -------------------------------------------------------------------------
   // Password gate
@@ -2553,14 +2584,11 @@
   }
 
   async function tryPassword(candidate) {
-    var res = await fetch('/api/usage', {
-      headers: candidate ? { 'x-team-password': candidate } : {}
-    });
+    var res = await fetch('/api/usage', { headers: candidate ? { 'x-team-password': candidate } : {} });
     return res.ok;
   }
 
-  // Reveal control. Keeping focus in the field means the caret does not jump,
-  // so someone checking a typo can carry on typing straight away.
+  // Reveal control. Keeping focus in the field means the caret does not jump.
   gateToggle.addEventListener('click', function () {
     var showing = gatePassword.type === 'text';
     var end = gatePassword.value.length;
@@ -2581,14 +2609,8 @@
     gateToggle.title = 'Show password';
   }
 
-  // Enter submits the gate. Browsers do this implicitly for a single-field form,
-  // but the gate is the only way into the app, so it is wired explicitly rather
-  // than left to implicit submission.
   gatePassword.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !gateSubmit.disabled) {
-      e.preventDefault();
-      gateForm.requestSubmit();
-    }
+    if (e.key === 'Enter' && !gateSubmit.disabled) { e.preventDefault(); gateForm.requestSubmit(); }
   });
 
   gateForm.addEventListener('submit', async function (e) {
@@ -2597,10 +2619,8 @@
     gateSubmit.disabled = true;
     gateSubmit.textContent = 'Checking';
     try {
-      var ok = await tryPassword(candidate);
-      if (!ok) {
-        // The field keeps its value.
-        gatePassword.classList.add('is-error');
+      if (!(await tryPassword(candidate))) {
+        gatePassword.classList.add('is-error');   // the field keeps its value
         gateError.hidden = false;
         gateError.textContent = 'Password not recognised. Check for a trailing space, then try again.';
         gatePassword.focus();
@@ -2624,10 +2644,11 @@
   function enterStudio() {
     gate.hidden = true;
     app.hidden = false;
-    placeNameField();
     renderRail();
+    autosize();
     promptEl.focus();
     loadSavedRuns();
+    refreshBalance();
     // The server knows when its disk is replaced on every deploy. Say so here,
     // where the people whose work it is will see it, not only in a deploy log.
     if (config.storageEphemeral) {
@@ -2642,116 +2663,100 @@
   async function loadSavedRuns() {
     if (!config || !config.savesImages) return;
     try {
-      var headers = password ? { 'x-team-password': password } : {};
-      var res = await fetch('/api/runs?limit=20', { headers: headers });
+      var res = await fetch('/api/runs?limit=40', { headers: authHeaders({}) });
       if (!res.ok) return;
       var payload = await res.json();
-      var restored = (payload.runs || []).map(function (r) {
-        var frames = r.images.map(function (img) {
-          return {
-            status: 'done',
-            error: null,
-            image: {
-              id: img.id,
-              src: '/api/image/' + img.id,
-              ext: (img.id.split('.').pop() || 'png'),
-              bytes: 0, width: 0, height: 0,
-              frame: img.frame,
-              favourite: Boolean(img.favourite),
-              revised_prompt: null
-            }
-          };
-        });
-        var at = Date.parse(r.timestamp) || Date.now();
-        return {
-          id: 'saved-' + r.id,
-          mode: r.mode === 'edit' ? 'edit' : 'generate',
-          model: r.model,
-          prompt: r.prompt || '',
-          quality: r.quality,
-          shape: r.aspect_ratio || 'auto',
-          resolution: r.resolution || '1k',
-          n: frames.length,
-          // The photos themselves are not kept, only how many there were and
-          // whether they were combined, so the card can still say so.
-          // Combined, or a single photo: images out. Several photos edited
-          // apart is the only case that counts photos.
-          plan: r.reference || !(r.sources > 1) ? 'reference' : 'each',
-          sourceCount: typeof r.sources === 'number' ? r.sources : 0,
-          sources: [],
-          frames: frames,
-          controllers: [],
-          status: 'done',
-          startedAt: at,
-          finishedAt: at,
-          cost: r.cost,
-          counted: true,
-          cancelled: false,
-          degraded: false,
-          restored: true
-        };
-      });
+      var restored = (payload.runs || []).map(restoreRun);
       if (!restored.length) return;
-      // Anything generated in this tab stays on top of what was restored.
-      runs = runs.concat(restored);
+      // Anything made in this tab stays on top of what was restored.
+      var have = {};
+      runs.forEach(function (r) { have[r.id] = true; });
+      runs = runs.concat(restored.filter(function (r) { return !have[r.id]; }));
       renderRuns();
     } catch (err) {
-      // The sheet simply stays empty; nothing here is worth an error card.
+      // The gallery simply stays empty; nothing here is worth an error.
     }
+  }
+
+  function restoreRun(r) {
+        var frames = r.images.map(function (img) {
+          return { status: 'done', error: null, image: {
+            id: img.id, src: '/api/image/' + img.id, ext: (img.id.split('.').pop() || 'png'),
+            bytes: 0, width: 0, height: 0, frame: img.frame,
+            favourite: Boolean(img.favourite), revised_prompt: null
+          } };
+        });
+        var at = Date.parse(r.timestamp) || Date.now();
+        var kept = Array.isArray(r.sourceFiles) ? r.sourceFiles : [];
+        return {
+          id: 'saved-' + r.id, mode: r.mode === 'edit' ? 'edit' : 'generate', model: r.model,
+          prompt: r.prompt || '', quality: r.quality,
+          shape: r.aspect_ratio || 'auto', resolution: r.resolution || '1k', n: frames.length,
+          // Combined, or photos edited apart? A combined run says so. Otherwise
+          // each log line carried one photo, so several kept photos means they
+          // were edited apart, one image per photo.
+          plan: r.reference ? 'reference'
+            : kept.length > 1 ? 'each' : 'reference',
+          sourceCount: r.reference ? (r.sources || kept.length) : Math.max(kept.length, typeof r.sources === 'number' ? r.sources : 0),
+          // The photos it was made from, if the server still has every one.
+          sources: [], sourceIds: kept,
+          ratio: null, user: r.user || null,
+          frames: frames, controllers: [], status: 'done', startedAt: at, finishedAt: at,
+          cost: r.cost, counted: true, cancelled: false, degraded: false, restored: true
+        };
   }
 
   // -------------------------------------------------------------------------
   // Boot
   // -------------------------------------------------------------------------
+  function bootFailure(title, body) {
+    document.body.innerHTML =
+      '<div class="gate"><div class="gate__card"><div class="gate__title">' + title + '</div>' +
+      '<p class="gate__sub">' + body + '</p></div></div>';
+  }
+
   async function boot() {
     var saved = readStore(STORE_KEY) || {};
 
     if (!window.ImagineRequest) {
-      document.body.innerHTML =
-        '<div class="gate"><div class="gate__card">' +
-        '<div class="gate__title">Part of the studio did not load</div>' +
-        '<p class="gate__sub">request-body.js is missing or failed to load, so nothing can be sent. Reload; if it persists, check the server is serving /public.</p>' +
-        '</div></div>';
+      bootFailure('Part of the studio did not load',
+        'request-body.js is missing or failed to load, so nothing can be sent. Reload; if it persists, check the server is serving /public.');
       return;
     }
-
     try {
-      var res = await fetch('/api/config');
-      config = await res.json();
+      config = await (await fetch('/api/config')).json();
     } catch (err) {
-      document.body.innerHTML =
-        '<div class="gate"><div class="gate__card">' +
-        '<div class="gate__title">The studio server is not answering</div>' +
-        '<p class="gate__sub">This page loaded but /api/config did not. Check that node server.js is still running, then reload.</p>' +
-        '</div></div>';
+      bootFailure('The studio server is not answering',
+        'This page loaded but /api/config did not. Check that node server.js is still running, then reload.');
       return;
     }
 
-    state.model = saved.model || '';
-    state.quality = saved.quality || 'auto';
-    state.shape = saved.shape || '9:16';
-    state.resolution = saved.resolution || '1k';
     if (typeof config.maxEditSources === 'number') MAX_EDIT_SOURCES = config.maxEditSources;
     if (typeof config.maxEditVariants === 'number') MAX_EDIT_VARIANTS = config.maxEditVariants;
     if (typeof config.maxFrames === 'number') MAX_FRAMES = config.maxFrames;
 
+    state.model = saved.model || '';
+    state.quality = saved.quality || 'auto';
+    state.shape = SHAPES.indexOf(saved.shape) !== -1 ? saved.shape : '9:16';
+    state.resolution = RESOLUTIONS.indexOf(saved.resolution) !== -1 ? saved.resolution : '1k';
     state.frames = Math.min(MAX_FRAMES, Math.max(1, Number(saved.frames) || 1));
-    state.variants = Math.min(MAX_EDIT_VARIANTS, Math.max(1, Number(saved.variants) || 1));
-    state.editShape = SHAPES.some(function (s) { return s.value === saved.editShape; }) ? saved.editShape : 'auto';
+    state.editShape = SHAPES.indexOf(saved.editShape) !== -1 ? saved.editShape : 'auto';
     state.editResolution = RESOLUTIONS.indexOf(saved.editResolution) !== -1 ? saved.editResolution : '1k';
+    state.variants = Math.min(MAX_EDIT_VARIANTS, Math.max(1, Number(saved.variants) || 1));
     state.name = saved.name || '';
+    state.filter = saved.filter === 'fav' || saved.filter === 'mine' ? saved.filter : 'all';
 
+    userName.value = state.name;
+    renderAvatar();
+    setTheme(document.documentElement.getAttribute('data-theme'));
     buildModelOptions();
-    buildShapeOptions();
-    buildSizeOptions();
-    syncName(state.name);
     renderSpend();
+    setFilter(state.filter);
 
     // No key on the server blocks everything, and no password will change that.
     if (!config.hasKey) {
       gate.hidden = true;
       app.hidden = false;
-      placeNameField();
       renderRail();
       showError('No API key on the server',
         'Generating is switched off until someone adds the team key to the server environment. Post in #design-ops — nothing you change here will fix it.',
@@ -2760,22 +2765,14 @@
       return;
     }
 
-    if (!config.requiresPassword) {
-      enterStudio();
-      return;
-    }
+    if (!config.requiresPassword) { enterStudio(); return; }
 
     var stored = readStore(PASS_KEY);
     if (stored) {
       try {
-        if (await tryPassword(stored)) {
-          password = stored;
-          enterStudio();
-          return;
-        }
+        if (await tryPassword(stored)) { password = stored; enterStudio(); return; }
       } catch (err) { /* fall through to the gate */ }
     }
-
     gate.hidden = false;
     gatePassword.focus();
   }
