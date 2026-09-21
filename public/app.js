@@ -3248,6 +3248,8 @@
   // Composer wiring
   // -------------------------------------------------------------------------
   promptEl.addEventListener('input', function () {
+    // Text in the box means it is in use, however it got there.
+    renderIdle();
     autosize();
     updateMention();
     renderAction();

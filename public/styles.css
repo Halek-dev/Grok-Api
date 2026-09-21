@@ -47,6 +47,7 @@
   --scrim:      rgba(8, 11, 10, 0.86);
   --glass-veil: rgba(10, 14, 13, 0.62);
   --glass:      rgba(28, 35, 34, 0.72);
+  --glass-strong: rgba(20, 26, 25, 0.82);
   --glass-line: rgba(205, 230, 220, 0.16);
   --shadow:     0 12px 40px rgba(0, 0, 0, 0.5);
 }
@@ -79,6 +80,7 @@
   --scrim:      rgba(14, 22, 20, 0.9);
   --glass-veil: rgba(236, 240, 238, 0.6);
   --glass:      rgba(255, 255, 255, 0.74);
+  --glass-strong: rgba(255, 255, 255, 0.86);
   --glass-line: rgba(23, 64, 58, 0.16);
   --shadow:     0 12px 40px rgba(23, 51, 44, 0.16);
 }
@@ -607,9 +609,10 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   left: 0; right: 0; bottom: 0;
   z-index: 25;
   padding: 0 16px 18px;
+  /* The dock has no ground of its own: the composer floats over the gallery,
+     and the pictures carry on behind and around it. Only the things inside it
+     take clicks — the empty space beside and above them belongs to the wall. */
   pointer-events: none;
-  /* The gallery fades out behind the composer rather than being cut by it. */
-  background: linear-gradient(to bottom, transparent, var(--page) 46px);
 }
 .dock__inner {
   max-width: 760px;
@@ -617,12 +620,16 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  pointer-events: auto;
-  padding-top: 40px;
+  pointer-events: none;
 }
+.dock__inner > * { pointer-events: auto; }
 
 .composer {
-  background: var(--surface);
+  /* Frosted glass. Pictures passing underneath show through softly, and the
+     prompt and pills stay readable whatever is behind them. */
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  backdrop-filter: blur(22px) saturate(1.3);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
   padding: 12px 12px 10px;
@@ -653,7 +660,7 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .composer.is-idle .composer__prompt { height: 32px !important; min-height: 0; margin: 0; padding: 5px 4px; overflow: hidden; white-space: nowrap; }
 .composer__summary { display: none; }
 .composer.is-idle .composer__summary { display: block; flex: 0 0 auto; padding: 0 10px 0 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.composer.is-over { border-color: var(--structure); background: linear-gradient(var(--wash), var(--wash)), var(--surface); }
+.composer.is-over { border-color: var(--structure); background: linear-gradient(var(--wash), var(--wash)), var(--glass-strong); }
 
 .composer__top {
   display: flex;
@@ -845,7 +852,7 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  background: var(--sunken);
+  background: var(--wash);
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
