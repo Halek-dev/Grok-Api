@@ -35,7 +35,7 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 
 // DATA_DIR, USAGE_LOG and IMAGE_DIR are set once the .env parser exists, below.
-let DATA_DIR, USAGE_LOG, IMAGE_DIR;
+let DATA_DIR, USAGE_LOG, IMAGE_DIR, SOURCE_DIR;
 
 const MAX_BODY_BYTES = 40 * 1024 * 1024; // base64 source images are large
 const PROMPT_LOG_CHARS = 300;
@@ -50,6 +50,7 @@ const PRICES = imagine.PRICES;
 const QUALITY_MODELS = imagine.QUALITY_MODELS;
 const { createThrottle } = require('./lib/throttle.js');
 const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.js');
+const { remainingFrom } = require('./lib/balance.js');
 
 // A refused or failed upstream request, written to stderr — on Railway, the
 // deploy log. The usage log records only successes and xAI's console does not
@@ -105,6 +106,9 @@ const STORAGE = require('./lib/storage.js').resolveStorage(function (name) { ret
 DATA_DIR = STORAGE.dir;
 USAGE_LOG = path.join(DATA_DIR, 'usage.jsonl');
 IMAGE_DIR = path.join(DATA_DIR, 'images');
+// The photos people attach to an edit. Kept so a past edit can be run again, or
+// loaded back into the composer, without finding and attaching them again.
+SOURCE_DIR = path.join(DATA_DIR, 'sources');
 
 // Saving is what makes a run survive a refresh. Turn it off and the app behaves
 // as it did before: results live in the browser tab only.
@@ -122,6 +126,7 @@ let STORAGE_PROBLEM = '';
 if (SAVE_IMAGES) {
   try {
     fs.mkdirSync(IMAGE_DIR, { recursive: true });
+    fs.mkdirSync(SOURCE_DIR, { recursive: true });
     const probe = path.join(IMAGE_DIR, '.write-probe');
     fs.writeFileSync(probe, 'ok');
     fs.unlinkSync(probe);
@@ -143,6 +148,14 @@ if (SAVE_IMAGES) {
 // Only override this to route through a gateway, or to point the proxy at a
 // stub while testing. It must speak the same API as api.x.ai.
 const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+$/, '');
+
+// Optional. xAI's Management API is a separate service with its own key, and is
+// the only place the remaining prepaid credit can be read. Without the key the
+// top bar shows what was spent and nothing about what is left. The key is used
+// for two read-only billing calls and, like the API key, never leaves here.
+const XAI_MANAGEMENT_KEY = String(env('XAI_MANAGEMENT_KEY', '')).trim();
+const XAI_MANAGEMENT_BASE = String(env('XAI_MANAGEMENT_BASE_URL', 'https://management-api.x.ai')).replace(/\/+$/, '');
+const XAI_TEAM_ID = String(env('XAI_TEAM_ID', '')).trim();
 
 // The chat model behind /api/describe, which reads photographs and answers in
 // text. Combining pictures no longer goes through it — the edits endpoint takes
@@ -409,6 +422,50 @@ async function saveImage(b64) {
   }
 }
 
+// A photo attached to an edit, kept under the hash of its bytes. The same photo
+// sent with ten variants, or reused next week, is written once; using it again
+// refreshes its date so the ones in use are the last to be cleared. Only data
+// URIs are kept — a public URL or a Files id is xAI's to store, not ours.
+async function saveSource(uri) {
+  if (!SAVE_IMAGES || !STORAGE_READY || typeof uri !== 'string') return null;
+  const m = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=\s]+)$/.exec(uri);
+  if (!m) return null;
+  try {
+    const buf = Buffer.from(m[2], 'base64');
+    const id = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 32) + '.' + sniffBuffer(buf);
+    const file = path.join(SOURCE_DIR, id);
+    try {
+      const now = new Date();
+      await fsp.utimes(file, now, now);
+    } catch {
+      await fsp.writeFile(file, buf);
+    }
+    return id;
+  } catch (err) {
+    console.error('[sources] could not save: ' + err.message);
+    return null;
+  }
+}
+
+// Same ceiling as generated images, counted separately.
+async function pruneSources() {
+  if (!SAVE_IMAGES || !MAX_STORED_IMAGES) return;
+  let names;
+  try { names = await fsp.readdir(SOURCE_DIR); } catch { return; }
+  if (names.length <= MAX_STORED_IMAGES) return;
+  const stats = [];
+  for (const name of names) {
+    try {
+      const st = await fsp.stat(path.join(SOURCE_DIR, name));
+      if (st.isFile()) stats.push({ name: name, at: st.mtimeMs });
+    } catch { /* vanished */ }
+  }
+  stats.sort((a, b) => b.at - a.at);
+  for (const old of stats.slice(MAX_STORED_IMAGES)) {
+    try { await fsp.unlink(path.join(SOURCE_DIR, old.name)); } catch { /* already gone */ }
+  }
+}
+
 // Favourites are a flat set of image ids. Small enough to rewrite whole, and a
 // team this size will not race on it meaningfully.
 const FAV_FILE = () => path.join(DATA_DIR, 'favourites.json');
@@ -497,13 +554,14 @@ function validImageId(id) {
   return typeof id === 'string' && /^[0-9a-f]{32}\.(png|jpg|webp)$/.test(id);
 }
 
-async function serveSavedImage(res, id) {
+async function serveSavedImage(res, id, dir) {
+  dir = dir || IMAGE_DIR;
   if (!validImageId(id)) return fail(res, 400, 'Not a valid image id.');
-  const file = path.join(IMAGE_DIR, id);
+  const file = path.join(dir, id);
   // Belt and braces: the pattern above already forbids separators, but resolve
   // and check anyway so the guard does not rest on one regex.
   const resolved = path.resolve(file);
-  if (!resolved.startsWith(IMAGE_DIR + path.sep)) return fail(res, 403, 'Forbidden.');
+  if (!resolved.startsWith(dir + path.sep)) return fail(res, 403, 'Forbidden.');
 
   let stat;
   try {
@@ -522,7 +580,7 @@ async function serveSavedImage(res, id) {
 
 // Rebuild recent runs from the log so the results survive a refresh. Lines from
 // one press of the button share a runId and are folded back into one run.
-async function readRuns(limit) {
+async function readRuns(limit, favouritesOnly) {
   const favourites = await readFavourites();
   let raw;
   try {
@@ -557,7 +615,8 @@ async function readRuns(limit) {
         reference: Boolean(r.reference),
         prompt: r.prompt,
         cost: 0,
-        images: []
+        images: [],
+        sourceLines: []
       });
       order.push(key);
     }
@@ -569,9 +628,15 @@ async function readRuns(limit) {
         run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id) });
       }
     }
+    if (Array.isArray(r.sourceFiles)) {
+      run.sourceLines.push({ frame: (r.files[0] && r.files[0].frame) || 0, ids: r.sourceFiles });
+    }
   }
 
-  const runs = order.map((k) => byRun.get(k)).reverse().slice(0, limit);
+  let runs = order.map((k) => byRun.get(k)).reverse();
+  // The library: every run that still has a favourite in it, however old.
+  if (favouritesOnly) runs = runs.filter((run) => run.images.some((img) => img.favourite));
+  runs = runs.slice(0, limit);
 
   // Drop anything whose file has since been pruned, so the client is never sent
   // an id that will 404.
@@ -584,12 +649,84 @@ async function readRuns(limit) {
         kept.push(img);
       } catch { /* pruned */ }
     }
+    // The photos this edit was made from. Combined: every line carries the same
+    // list, so the first is the list. Edited apart: one photo per line, in
+    // frame order. Offered only if every one of them is still on disk — a
+    // partial set would re-run as a different edit.
+    const lines = run.sourceLines.sort((a, b) => a.frame - b.frame);
+    delete run.sourceLines;
+    let ids = [];
+    if (lines.length) {
+      ids = run.reference || lines[0].ids.length > 1
+        ? lines[0].ids
+        : lines.reduce((all, l) => all.concat(l.ids), []);
+    }
+    let complete = ids.length > 0 && ids.every(validImageId);
+    for (const id of complete ? ids : []) {
+      try { await fsp.access(path.join(SOURCE_DIR, id)); } catch { complete = false; break; }
+    }
+    run.sourceFiles = complete ? ids : [];
+
     if (kept.length) {
       run.images = kept.sort((a, b) => a.frame - b.frame);
       alive.push(run);
     }
   }
   return alive;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/balance — what is left of the prepaid credit
+//
+// Two read-only calls to xAI's Management API, cached for a minute so a busy
+// page does not hammer it. Always answers 200: no key, a refused key or an
+// outage each come back as available:false with a reason, because a missing
+// balance must never stop anyone working.
+// ---------------------------------------------------------------------------
+let balanceCache = { at: 0, value: null };
+let teamIdCache = XAI_TEAM_ID;
+let lastBalanceProblem = '';
+
+async function getJson(url, key) {
+  const response = await fetch(url, {
+    headers: { authorization: 'Bearer ' + key },
+    signal: AbortSignal.timeout(15000)
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(response.status + ' ' + extractError(text, response.status).slice(0, 160));
+  return JSON.parse(text);
+}
+
+async function readBalance() {
+  if (!XAI_MANAGEMENT_KEY) return { available: false, reason: 'no_management_key' };
+  if (balanceCache.value && Date.now() - balanceCache.at < 60000) return balanceCache.value;
+  let value;
+  try {
+    // The team the API key belongs to — asked once, from the ordinary API.
+    if (!teamIdCache && XAI_API_KEY) {
+      const who = await getJson(XAI_BASE + '/api-key', XAI_API_KEY);
+      teamIdCache = String(who.team_id || '');
+    }
+    if (!teamIdCache) throw new Error('could not learn the team id; set XAI_TEAM_ID');
+    const base = XAI_MANAGEMENT_BASE + '/v1/billing/teams/' + encodeURIComponent(teamIdCache);
+    const ledger = await getJson(base + '/prepaid/balance', XAI_MANAGEMENT_KEY);
+    // The preview is what makes the figure live. If it fails the ledger alone
+    // is still worth showing, flagged as possibly generous.
+    let preview = null;
+    try { preview = await getJson(base + '/postpaid/invoice/preview', XAI_MANAGEMENT_KEY); } catch { /* inexact */ }
+    const figures = remainingFrom(ledger, preview);
+    if (!figures) throw new Error('the balance response had no readable total');
+    value = Object.assign({ available: true, checkedAt: new Date().toISOString() }, figures);
+    lastBalanceProblem = '';
+  } catch (err) {
+    const problem = err && err.message ? err.message : 'unknown error';
+    // Said once per distinct problem, not once a minute for ever.
+    if (problem !== lastBalanceProblem) console.error('[balance] could not read the prepaid balance: ' + problem);
+    lastBalanceProblem = problem;
+    value = { available: false, reason: 'unreachable', detail: problem };
+  }
+  balanceCache = { at: Date.now(), value: value };
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1100,19 @@ async function handleImages(req, res, body) {
   }
   pruneImages().catch(function () { /* pruning is housekeeping, never fatal */ });
 
+  // Keep the photos this edit was made from, so it can be run again or loaded
+  // back into the composer later. Same rule as the images: a failure to write
+  // is logged and never fails the request.
+  let sourceFiles = null;
+  if (mode === 'edit' && saved.length) {
+    const urls = built.payload.images ? built.payload.images.map(function (i) { return i.url; })
+      : built.payload.image ? [built.payload.image.url] : [];
+    const ids = [];
+    for (const u of urls) ids.push(await saveSource(u));
+    if (ids.length && ids.every(Boolean)) sourceFiles = ids;
+    pruneSources().catch(function () { /* housekeeping */ });
+  }
+
   await appendUsage({
     timestamp: new Date().toISOString(),
     runId: runId,
@@ -975,6 +1125,7 @@ async function handleImages(req, res, body) {
     aspect_ratio: effectiveAspect,
     sources: built.sources,
     reference: built.reference,
+    sourceFiles: sourceFiles,
     images: images.length,
     cost: cost,
     costEstimated: billed.estimated,
@@ -1077,6 +1228,14 @@ const server = http.createServer(async function (req, res) {
     // Reading one saved image by its random id needs no password, because an
     // <img src> cannot send a header. Anything that CHANGES something falls
     // through to the authenticated block below.
+    // The photos an edit was made from, under the same rule as the images: the
+    // random-looking name is the capability, and only the password-protected
+    // run list hands names out.
+    if (urlPath.startsWith('/api/source/') && req.method === 'GET') {
+      if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+      return await serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/source/'.length)), SOURCE_DIR);
+    }
+
     if (urlPath.startsWith('/api/image/') && req.method === 'GET') {
       if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
       return await serveSavedImage(res, decodeURIComponent(urlPath.slice('/api/image/'.length)));
@@ -1177,11 +1336,19 @@ const server = http.createServer(async function (req, res) {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/runs.');
         if (!SAVE_IMAGES || !STORAGE_READY) return sendJson(res, 200, { runs: [], saving: false });
         let limit = 20;
+        let favouritesOnly = false;
         try {
-          const q = new URL(req.url, 'http://localhost').searchParams.get('limit');
-          if (q) limit = Math.min(100, Math.max(1, parseInt(q, 10) || 20));
+          const params = new URL(req.url, 'http://localhost').searchParams;
+          favouritesOnly = params.get('favourites') === '1';
+          const q = params.get('limit');
+          if (q) limit = Math.min(favouritesOnly ? 500 : 100, Math.max(1, parseInt(q, 10) || 20));
         } catch { /* keep the default */ }
-        return sendJson(res, 200, { runs: await readRuns(limit), saving: true });
+        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly), saving: true });
+      }
+
+      if (urlPath === '/api/balance') {
+        if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/balance.');
+        return sendJson(res, 200, await readBalance());
       }
 
       if (urlPath === '/api/describe') {
@@ -1284,6 +1451,7 @@ server.listen(PORT, HOST, function () {
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
+  console.log('  Credit balance    ' + (XAI_MANAGEMENT_KEY ? 'shown (management key loaded)' : 'not shown — set XAI_MANAGEMENT_KEY to show what is left'));
   console.log('  Usage log         ' + USAGE_LOG);
   console.log('  Failures          one [xai-fail] line each, here on stderr');
   console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'
