@@ -651,6 +651,7 @@ the shape, size or quality they chose; the line says what xAI objected to.
 | `DATA_DIR` | an attached Railway volume if there is one, else the project folder | Where saved images, favourites and `usage.jsonl` live. Must be on a mounted volume on any host that replaces its disk on deploy. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
+| `SHUTDOWN_GRACE_MS` | `8000` | How long requests in flight are given to finish when the server is told to stop. |
 | `STUDIO_NAME` | `Imagine studio` | What the studio calls itself in the top bar, on the password screen and in the browser tab. |
 | `XAI_MANAGEMENT_KEY` | *(none)* | Optional. An xAI **management** key. When set, the top bar shows the prepaid credit that is left. Read-only billing calls; never sent to the browser. |
 | `XAI_TEAM_ID` | looked up from the API key | Only needed if that lookup fails. |
@@ -716,6 +717,17 @@ server for a few minutes. Nothing is charged for a request turned away like
 this. Switch model, or wait a few minutes. If it never recovers — see the next
 section for how to tell — then it is real: check the model still exists in the
 xAI console and that the key on the server can use it.
+
+**Railway says "Deployment crashed" after every redeploy**
+If the deploy log ends with `Stopping Container` and `npm error signal SIGTERM`,
+nothing crashed: Railway stopped the old container to start the new one, the
+process died abruptly, and the abrupt exit was filed as a crash. The server now
+handles that signal — it stops taking requests, lets the ones in flight finish,
+and exits cleanly — and `railway.json` starts it with `node server.js` directly
+so the signal reaches it rather than `npm`. A healthy stop reads
+`[server] SIGTERM received` then `[server] stopped cleanly`. To protect a
+picture that is mid-render during a deploy, set
+`RAILWAY_DEPLOYMENT_DRAINING_SECONDS=60` and `SHUTDOWN_GRACE_MS=55000`.
 
 **"Some frames did not arrive"**
 Part of a run failed while the rest succeeded. The images that came back are kept

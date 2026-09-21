@@ -1585,6 +1585,18 @@ process.on('uncaughtException', function (err) {
   process.exit(1);
 });
 
+// Asked to stop — a redeploy, a changed variable, Ctrl+C. Finish what is in
+// flight and leave with a clean exit code, so the host does not file an orderly
+// stop as a crash. See lib/shutdown.js. The grace period is kept under the ten
+// seconds or so a host typically allows before killing the process outright;
+// raise SHUTDOWN_GRACE_MS together with the host's own draining time.
+const shutdown = require('./lib/shutdown.js').createShutdown(server, {
+  graceMs: Math.max(0, Number(env('SHUTDOWN_GRACE_MS', 8000)) || 0),
+  log: function (line) { console.log(line); }
+});
+process.on('SIGTERM', function () { shutdown('SIGTERM'); });
+process.on('SIGINT', function () { shutdown('SIGINT'); });
+
 // Without this, a port clash or a blocked bind exits with a raw stack trace.
 // Say what happened and what to do about it, like every other error here.
 server.on('error', function (err) {
