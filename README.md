@@ -723,9 +723,17 @@ If the deploy log ends with `Stopping Container` and `npm error signal SIGTERM`,
 nothing crashed: Railway stopped the old container to start the new one, the
 process died abruptly, and the abrupt exit was filed as a crash. The server now
 handles that signal — it stops taking requests, lets the ones in flight finish,
-and exits cleanly — and `railway.json` starts it with `node server.js` directly
-so the signal reaches it rather than `npm`. A healthy stop reads
-`[server] SIGTERM received` then `[server] stopped cleanly`. To protect a
+and exits cleanly. The signal has to reach it, though, and `npm start` gets in
+the way: npm runs the command through a small shell, and that shell dies on
+SIGTERM without passing it on. So the start script is `exec node server.js`
+(the shell hands itself over to the server, which then receives what npm
+forwards), and `railway.json` and the `Procfile` both ask for
+`node server.js` with no npm at all. If the notice persists, set it by hand:
+service **Settings → Deploy → Custom Start Command** = `node server.js`. A
+healthy stop reads `[server] SIGTERM received` then `[server] stopped cleanly`;
+a start-up log with no `> imagine-studio@… start` line means npm is out of the
+way. Because of the `exec`, `npm start` does not work in Windows' own shell —
+run `node server.js` there, as the setup steps say. To protect a
 picture that is mid-render during a deploy, set
 `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=60` and `SHUTDOWN_GRACE_MS=55000`.
 
