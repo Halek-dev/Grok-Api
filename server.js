@@ -35,7 +35,7 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 
 // DATA_DIR, USAGE_LOG and IMAGE_DIR are set once the .env parser exists, below.
-let DATA_DIR, USAGE_LOG, IMAGE_DIR, SOURCE_DIR;
+let DATA_DIR, USAGE_LOG, IMAGE_DIR, SOURCE_DIR, TRASH_DIR;
 
 const MAX_BODY_BYTES = 40 * 1024 * 1024; // base64 source images are large
 const PROMPT_LOG_CHARS = 300;
@@ -51,6 +51,7 @@ const QUALITY_MODELS = imagine.QUALITY_MODELS;
 const { createThrottle } = require('./lib/throttle.js');
 const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.js');
 const { remainingFrom } = require('./lib/balance.js');
+const promptLib = require('./lib/prompts.js');
 
 // A refused or failed upstream request, written to stderr — on Railway, the
 // deploy log. The usage log records only successes and xAI's console does not
@@ -109,6 +110,8 @@ IMAGE_DIR = path.join(DATA_DIR, 'images');
 // The photos people attach to an edit. Kept so a past edit can be run again, or
 // loaded back into the composer, without finding and attaching them again.
 SOURCE_DIR = path.join(DATA_DIR, 'sources');
+// Deleted images wait here for a few minutes, so a delete can be undone.
+TRASH_DIR = path.join(DATA_DIR, 'trash');
 
 // Saving is what makes a run survive a refresh. Turn it off and the app behaves
 // as it did before: results live in the browser tab only.
@@ -127,6 +130,7 @@ if (SAVE_IMAGES) {
   try {
     fs.mkdirSync(IMAGE_DIR, { recursive: true });
     fs.mkdirSync(SOURCE_DIR, { recursive: true });
+    fs.mkdirSync(TRASH_DIR, { recursive: true });
     const probe = path.join(IMAGE_DIR, '.write-probe');
     fs.writeFileSync(probe, 'ok');
     fs.unlinkSync(probe);
@@ -156,6 +160,9 @@ const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+
 const XAI_MANAGEMENT_KEY = String(env('XAI_MANAGEMENT_KEY', '')).trim();
 const XAI_MANAGEMENT_BASE = String(env('XAI_MANAGEMENT_BASE_URL', 'https://management-api.x.ai')).replace(/\/+$/, '');
 const XAI_TEAM_ID = String(env('XAI_TEAM_ID', '')).trim();
+
+// What the studio calls itself: the top bar, the password screen, the tab.
+const STUDIO_NAME = String(env('STUDIO_NAME', 'Imagine studio')).trim().slice(0, 40) || 'Imagine studio';
 
 // The chat model behind /api/describe, which reads photographs and answers in
 // text. Combining pictures no longer goes through it — the edits endpoint takes
@@ -331,6 +338,78 @@ function passwordMatches(supplied) {
   const b = Buffer.from(TEAM_PASSWORD, 'utf8');
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// The prompt library — DATA_DIR/prompts.json
+//
+// Every prompt the team has used, so a good one can be found and used again.
+// One small file rewritten whole. Requests arrive several at a time (a run asks
+// for its frames concurrently), so every change goes through one queue: read,
+// change, write, then the next — or two frames landing together would each
+// read the old list and one would overwrite the other.
+// ---------------------------------------------------------------------------
+const PROMPTS_FILE = () => path.join(DATA_DIR, 'prompts.json');
+let promptQueue = Promise.resolve();
+
+async function readPrompts() {
+  try {
+    const list = JSON.parse(await fsp.readFile(PROMPTS_FILE(), 'utf8'));
+    return Array.isArray(list) ? list.filter((p) => p && promptLib.validPromptId(p.id) && typeof p.text === 'string') : [];
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') console.error('[prompts] could not read: ' + err.message);
+    // First run with the library: build it from what the usage log remembers.
+    if (err && err.code === 'ENOENT') {
+      try {
+        const rows = (await fsp.readFile(USAGE_LOG, 'utf8')).split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } });
+        return promptLib.fromUsage(rows.filter(Boolean));
+      } catch { /* no log either: an empty library */ }
+    }
+    return [];
+  }
+}
+
+// Written to a temporary file and swapped into place, so a crash mid-write
+// never leaves half a library. On Windows the swap is refused (EPERM, EBUSY)
+// if anything has the old file open at that instant — a virus scanner, a backup
+// — so it is tried a few times, and as a last resort written in place: a save
+// that might be torn beats a save that is silently lost.
+async function writePrompts(list) {
+  const file = PROMPTS_FILE();
+  const tmp = file + '.tmp';
+  const body = JSON.stringify(list);
+  await fsp.writeFile(tmp, body, 'utf8');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fsp.rename(tmp, file);
+      return;
+    } catch (err) {
+      if (!err || (err.code !== 'EPERM' && err.code !== 'EBUSY' && err.code !== 'EACCES')) throw err;
+      await new Promise(function (r) { setTimeout(r, 40 * (attempt + 1)); });
+    }
+  }
+  await fsp.writeFile(file, body, 'utf8');
+  await fsp.unlink(tmp).catch(function () { /* nothing to tidy */ });
+}
+
+// Reading goes through the same queue as writing. Besides never showing a list
+// that is about to change, it means this server never has the file open for
+// reading at the moment it is being swapped.
+function listPrompts() {
+  const job = promptQueue.then(readPrompts);
+  promptQueue = job.catch(function () { /* a failed read must not stall the queue */ });
+  return job;
+}
+
+// change(list) returns { list, changed, entry }. Resolves to that result.
+function changePrompts(change) {
+  const job = promptQueue.then(async function () {
+    const out = change(await readPrompts());
+    if (out.changed) await writePrompts(out.list);
+    return out;
+  });
+  promptQueue = job.catch(function (err) { console.error('[prompts] could not save: ' + err.message); });
+  return job;
 }
 
 // ---------------------------------------------------------------------------
@@ -533,20 +612,59 @@ async function deleteImages(ids) {
     const resolved = path.resolve(path.join(IMAGE_DIR, id));
     if (!resolved.startsWith(IMAGE_DIR + path.sep)) continue;
     try {
-      await fsp.unlink(resolved);
+      // Moved aside rather than destroyed, so the page can offer Undo. It is
+      // gone from the gallery, the library and every listing at once; the
+      // bytes themselves go a few minutes later (purgeTrash).
+      await fsp.rename(resolved, path.join(TRASH_DIR, id));
+      const now = new Date();
+      await fsp.utimes(path.join(TRASH_DIR, id), now, now).catch(function () { /* the date is only for purging */ });
       deleted.push(id);
     } catch {
       missing.push(id);
     }
   }
+  const wasFavourite = [];
   if (deleted.length) {
     const favourites = await readFavourites();
-    let touched = false;
-    for (const id of deleted) if (favourites.delete(id)) touched = true;
-    if (touched) await writeFavourites(favourites);
+    for (const id of deleted) if (favourites.delete(id)) wasFavourite.push(id);
+    if (wasFavourite.length) await writeFavourites(favourites);
   }
-  return { deleted: deleted, missing: missing, rejected: wanted.length !== (Array.isArray(ids) ? ids.length : 0) };
+  purgeTrash().catch(function () { /* housekeeping */ });
+  return { deleted: deleted, missing: missing, wasFavourite: wasFavourite };
 }
+
+// Puts back images deleted a moment ago, and their favourite marks.
+async function restoreImages(ids, favouriteIds) {
+  const restored = [];
+  for (const id of (Array.isArray(ids) ? ids : []).filter(validImageId)) {
+    try {
+      await fsp.rename(path.join(TRASH_DIR, id), path.join(IMAGE_DIR, id));
+      restored.push(id);
+    } catch { /* already purged, or never there */ }
+  }
+  const marks = (Array.isArray(favouriteIds) ? favouriteIds : []).filter((id) => restored.indexOf(id) !== -1);
+  if (marks.length) {
+    const favourites = await readFavourites();
+    marks.forEach((id) => favourites.add(id));
+    await writeFavourites(favourites);
+  }
+  return restored;
+}
+
+// Undo is offered for ten seconds; the trash is kept for ten minutes, which is
+// generous to a slow connection and still means "deleted" is soon true.
+const TRASH_MS = 10 * 60 * 1000;
+async function purgeTrash() {
+  let names;
+  try { names = await fsp.readdir(TRASH_DIR); } catch { return; }
+  for (const name of names) {
+    try {
+      const st = await fsp.stat(path.join(TRASH_DIR, name));
+      if (Date.now() - st.mtimeMs > TRASH_MS) await fsp.unlink(path.join(TRASH_DIR, name));
+    } catch { /* vanished */ }
+  }
+}
+setInterval(function () { purgeTrash().catch(function () {}); }, 5 * 60 * 1000).unref();
 
 // An id is exactly what saveImage produces: 32 hex characters, a dot, a known
 // extension. Anything else never reaches the filesystem.
@@ -580,7 +698,7 @@ async function serveSavedImage(res, id, dir) {
 
 // Rebuild recent runs from the log so the results survive a refresh. Lines from
 // one press of the button share a runId and are folded back into one run.
-async function readRuns(limit, favouritesOnly) {
+async function readRuns(limit, favouritesOnly, before) {
   const favourites = await readFavourites();
   let raw;
   try {
@@ -636,6 +754,8 @@ async function readRuns(limit, favouritesOnly) {
   let runs = order.map((k) => byRun.get(k)).reverse();
   // The library: every run that still has a favourite in it, however old.
   if (favouritesOnly) runs = runs.filter((run) => run.images.some((img) => img.favourite));
+  // Paging for the endless gallery: only runs older than the last one shown.
+  if (before) runs = runs.filter((run) => run.timestamp < before);
   runs = runs.slice(0, limit);
 
   // Drop anything whose file has since been pruned, so the client is never sent
@@ -1113,6 +1233,14 @@ async function handleImages(req, res, body) {
     pruneSources().catch(function () { /* housekeeping */ });
   }
 
+  // Into the prompt library. Never allowed to fail the request: the pictures
+  // are paid for and must be delivered whatever happens to a bookkeeping file.
+  if (SAVE_IMAGES && STORAGE_READY) {
+    changePrompts(function (list) {
+      return promptLib.recordUse(list, { text: prompt, mode: mode, user: user || null, runId: runId });
+    }).catch(function () { /* logged in the queue */ });
+  }
+
   await appendUsage({
     timestamp: new Date().toISOString(),
     runId: runId,
@@ -1167,7 +1295,8 @@ async function serveStatic(req, res, urlPath) {
   } catch {
     return fail(res, 400, 'Malformed path.');
   }
-  const rel = decoded === '/' ? '/index.html' : decoded;
+  // /asset is a view inside the app, not a file on disk: serve the same shell.
+  const rel = decoded === '/' || /^\/assets?\/?$/.test(decoded) ? '/index.html' : decoded;
 
   // Resolve first, then confirm the result is still inside public/. Scanning the
   // raw string for ".." is not enough — encodings and absolute paths get past it.
@@ -1209,6 +1338,7 @@ const server = http.createServer(async function (req, res) {
     if (urlPath === '/api/config') {
       if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/config.');
       return sendJson(res, 200, {
+        studioName: STUDIO_NAME,
         hasKey: Boolean(XAI_API_KEY),
         requiresPassword: Boolean(TEAM_PASSWORD),
         prices: PRICES,
@@ -1294,7 +1424,21 @@ const server = http.createServer(async function (req, res) {
         }
         if (body.ids.length > 200) return fail(res, 400, 'Delete at most 200 images at a time.');
         const result = await deleteImages(body.ids);
-        return sendJson(res, 200, { deleted: result.deleted, missing: result.missing });
+        return sendJson(res, 200, { deleted: result.deleted, missing: result.missing, wasFavourite: result.wasFavourite });
+      }
+
+      // Undo a delete made a moment ago.
+      if (urlPath === '/api/images/restore') {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for /api/images/restore.');
+        if (!SAVE_IMAGES) return fail(res, 404, 'Image saving is switched off on this server.');
+        let body;
+        try {
+          body = JSON.parse(await readBody(req, 1024 * 1024) || '{}');
+        } catch {
+          return fail(res, 400, 'The request body was not valid JSON.');
+        }
+        if (!Array.isArray(body.ids) || !body.ids.length) return fail(res, 400, 'Send an ids array naming the images to restore.');
+        return sendJson(res, 200, { restored: await restoreImages(body.ids.slice(0, 200), body.favourites) });
       }
 
       // Mark or unmark a favourite. Favourites are exempt from pruning, which is
@@ -1337,13 +1481,40 @@ const server = http.createServer(async function (req, res) {
         if (!SAVE_IMAGES || !STORAGE_READY) return sendJson(res, 200, { runs: [], saving: false });
         let limit = 20;
         let favouritesOnly = false;
+        let before = null;
         try {
           const params = new URL(req.url, 'http://localhost').searchParams;
           favouritesOnly = params.get('favourites') === '1';
+          const b = params.get('before');
+          if (b && !Number.isNaN(Date.parse(b))) before = new Date(Date.parse(b)).toISOString();
           const q = params.get('limit');
           if (q) limit = Math.min(favouritesOnly ? 500 : 100, Math.max(1, parseInt(q, 10) || 20));
         } catch { /* keep the default */ }
-        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly), saving: true });
+        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly, before), saving: true });
+      }
+
+      // The prompt library: list, favourite, delete, and put back.
+      if (urlPath === '/api/prompts') {
+        if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/prompts.');
+        return sendJson(res, 200, { prompts: promptLib.sorted(await listPrompts()) });
+      }
+      if (urlPath === '/api/prompts/favourite' || urlPath === '/api/prompts/delete' || urlPath === '/api/prompts/restore') {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for ' + urlPath + '.');
+        let body;
+        try {
+          body = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        } catch {
+          return fail(res, 400, 'The request body was not valid JSON.');
+        }
+        const action = urlPath.split('/').pop();
+        if (action !== 'restore' && !promptLib.validPromptId(body.id)) return fail(res, 400, 'Not a valid prompt id.');
+        const out = await changePrompts(function (list) {
+          if (action === 'favourite') return promptLib.setFavourite(list, body.id, body.favourite !== false);
+          if (action === 'delete') return promptLib.remove(list, body.id);
+          return promptLib.restore(list, body.prompt || {});
+        });
+        if (!out.entry && action !== 'restore') return fail(res, 404, 'That prompt is no longer in the library.');
+        return sendJson(res, 200, { prompt: out.entry, changed: out.changed });
       }
 
       if (urlPath === '/api/balance') {
@@ -1447,7 +1618,7 @@ server.on('error', function (err) {
 
 server.listen(PORT, HOST, function () {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  console.log('Imagine studio on http://' + shown + ':' + PORT);
+  console.log(STUDIO_NAME + ' on http://' + shown + ':' + PORT);
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');

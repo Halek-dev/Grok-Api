@@ -8,7 +8,12 @@ usage.jsonl
 images/
 # Photos people attached to edits. Real people's pictures: never commit them.
 sources/
+# Images deleted a moment ago, held so a delete can be undone.
+trash/
 favourites.json
+# The team's prompt library. Their words, not the repo's.
+prompts.json
+prompts.json.tmp
 
 node_modules/
 npm-debug.log*
