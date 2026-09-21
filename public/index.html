@@ -11,6 +11,8 @@
   try {
     var t = JSON.parse(localStorage.getItem('imagine-studio/theme'));
     if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    var a = JSON.parse(localStorage.getItem('imagine-studio/accent'));
+    if (typeof a === 'string' && /^[a-z]+$/.test(a)) document.documentElement.setAttribute('data-accent', a);
   } catch (e) { /* storage blocked: the dark default stands */ }
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,7 +26,7 @@
 <div class="gate" id="gate" hidden>
   <form class="gate__card" id="gate-form" novalidate>
     <div class="gate__mark" aria-hidden="true"></div>
-    <h1 class="gate__title">Imagine studio</h1>
+    <h1 class="gate__title" id="gate-title">Imagine studio</h1>
     <p class="gate__sub">Shared team access. Ask in #design-ops if you need the password.</p>
     <label class="label" for="gate-password">Team password</label>
     <div class="password-field">
@@ -57,7 +59,7 @@
   <header class="topbar">
     <div class="topbar__brand">
       <span class="brand-mark" aria-hidden="true"></span>
-      <span>Imagine studio</span>
+      <span id="brand-name">Imagine studio</span>
     </div>
 
     <!-- What the gallery shows. A radiogroup: exactly one is on. -->
@@ -65,9 +67,16 @@
       <button class="seg__btn" type="button" role="radio" data-filter="all" aria-checked="true">All</button>
       <button class="seg__btn" type="button" role="radio" data-filter="mine" aria-checked="false" tabindex="-1">Mine</button>
       <button class="seg__btn" type="button" role="radio" data-filter="fav" aria-checked="false" tabindex="-1">Library</button>
+      <button class="seg__btn" type="button" role="radio" data-filter="assets" aria-checked="false" tabindex="-1">Prompts</button>
     </div>
 
     <div class="topbar__spacer"></div>
+
+    <!-- How big the pictures are drawn. Yours alone; remembered in this browser. -->
+    <label class="sizer" title="Picture size">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+      <input type="range" id="thumb" min="1" max="5" step="1" value="3" aria-label="Picture size">
+    </label>
 
     <div class="topbar__spend">
       <span class="topbar__spend-label">Spent today</span>
@@ -89,6 +98,22 @@
         <div class="seg seg--block" id="theme" role="radiogroup" aria-labelledby="theme-label">
           <button class="seg__btn" type="button" role="radio" data-theme-choice="dark" aria-checked="true">Dark</button>
           <button class="seg__btn" type="button" role="radio" data-theme-choice="light" aria-checked="false" tabindex="-1">Light</button>
+        </div>
+        <span class="label label--gap" id="accent-label">Accent</span>
+        <div class="swatches" id="accent" role="radiogroup" aria-labelledby="accent-label">
+          <button class="swatch" type="button" role="radio" data-accent-choice="coral" aria-label="Coral" style="--sw:#E0A093"></button>
+          <button class="swatch" type="button" role="radio" data-accent-choice="amber" aria-label="Amber" style="--sw:#E2B463"></button>
+          <button class="swatch" type="button" role="radio" data-accent-choice="green" aria-label="Green" style="--sw:#7FCBA6"></button>
+          <button class="swatch" type="button" role="radio" data-accent-choice="blue" aria-label="Blue" style="--sw:#86B6EE"></button>
+          <button class="swatch" type="button" role="radio" data-accent-choice="violet" aria-label="Violet" style="--sw:#B7A7EE"></button>
+        </div>
+        <label class="switchrow">
+          <input type="checkbox" id="notify">
+          <span>Tell me when a run finishes<small>A desktop notification, only while this tab is in the background.</small></span>
+        </label>
+        <div class="popover__links">
+          <button class="btn-text" type="button" id="news-open">What’s new</button>
+          <button class="btn-text" type="button" id="keys-open">Keyboard shortcuts</button>
         </div>
       </div>
     </div>
@@ -123,7 +148,12 @@
       <!-- Opened by typing @ in the prompt when photos are attached. -->
       <div class="panel panel--menu" id="mention-menu" role="listbox" aria-label="Refer to a photo" hidden></div>
 
+      <!-- Opened by pressing the up arrow in an empty prompt. -->
+      <div class="panel panel--menu panel--history" id="history-menu" role="listbox" aria-label="Recent prompts" hidden></div>
+
       <form class="composer" id="rail" novalidate>
+        <!-- The menu a settings pill opens. One element, filled on demand. -->
+        <div class="pillmenu" id="pill-menu" role="listbox" hidden></div>
 
         <div class="composer__top" id="composer-top">
           <!-- Attached photos, in sending order. The first is the base. -->
@@ -145,32 +175,36 @@
         </div>
 
         <label class="visually-hidden" for="prompt" id="prompt-label">What should it make?</label>
-        <textarea class="composer__prompt" id="prompt" maxlength="1000" rows="1"
-                  placeholder="Describe the image — subject, setting, light, mood"
-                  aria-describedby="composer-hint"></textarea>
+        <!-- Behind the textarea lies a copy of its text in which "photo 2" is
+             given a coloured ground, so a reference to a photo shows as a tag.
+             The textarea itself stays an ordinary textarea. -->
+        <div class="prompt-wrap">
+          <div class="prompt-back" id="prompt-back" aria-hidden="true"></div>
+          <textarea class="composer__prompt" id="prompt" maxlength="1000" rows="1"
+                    placeholder="Describe the image — subject, setting, light, mood"
+                    aria-describedby="composer-hint"></textarea>
+        </div>
+        <!-- Shown only while the composer is resting as a slim bar. -->
+        <span class="composer__summary num" id="composer-summary" aria-hidden="true"></span>
 
         <div class="composer__bar">
           <div class="pills" id="pills">
-            <label class="pill" id="model-pill" title="Model">
+            <!-- Each setting is a pill that opens a small menu above it. The
+                 menus are built in app.js, where the prices are known. -->
+            <button class="pill" type="button" id="model-pill" data-menu="model" aria-haspopup="listbox" aria-expanded="false" title="Model">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1.5l1.3 3.2 3.2 1.3-3.2 1.3L7 10.5 5.7 7.3 2.5 6l3.2-1.3L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
               <span class="pill__text" id="model-text"></span>
-              <select class="pill__select" id="model" aria-label="Model"></select>
-            </label>
-            <label class="pill" id="shape-pill" title="Shape">
+            </button>
+            <button class="pill" type="button" id="shape-pill" data-menu="shape" aria-haspopup="listbox" aria-expanded="false" title="Shape">
               <span class="ratio" id="shape-icon" aria-hidden="true"></span>
-              <span class="pill__text" id="shape-text"></span>
-              <select class="pill__select num" id="shape" aria-label="Shape"></select>
-            </label>
-            <label class="pill" id="size-pill" title="Size">
+              <span class="pill__text num" id="shape-text"></span>
+            </button>
+            <button class="pill" type="button" id="size-pill" data-menu="size" aria-haspopup="listbox" aria-expanded="false" title="Size">
               <span class="pill__text num" id="size-text"></span>
-              <select class="pill__select num" id="size" aria-label="Size"></select>
-            </label>
-            <label class="pill" id="quality-field" title="Quality" hidden>
+            </button>
+            <button class="pill" type="button" id="quality-field" data-menu="quality" aria-haspopup="listbox" aria-expanded="false" title="Quality" hidden>
               <span class="pill__text" id="quality-text"></span>
-              <select class="pill__select" id="quality" aria-label="Quality">
-                <option value="auto">Auto</option>
-              </select>
-            </label>
+            </button>
             <div class="pill pill--stepper" id="frames-field" role="group" aria-labelledby="frames-label">
               <span class="visually-hidden" id="frames-label">Frames</span>
               <button class="pill__step" type="button" id="frames-minus" aria-label="Fewer">
@@ -206,16 +240,47 @@
      that can be done with it — lives on the card here, over a blurred view of
      the page behind. -->
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Frame viewer" hidden>
-  <div class="lightbox__stage">
+  <div class="lightbox__stage" id="lb-stage">
     <button class="lb-nav lb-nav--prev" type="button" id="lb-prev" aria-label="Previous frame">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
-    <img id="lb-image" alt="">
+
+    <!-- The picture, and over it — when comparing — the photo it was made from,
+         clipped at a divider you drag. Zoom and pan move this whole canvas. -->
+    <div class="lb-canvas" id="lb-canvas">
+      <img id="lb-image" alt="" draggable="false">
+      <div class="lb-compare" id="lb-compare" hidden><img id="lb-base" alt="" draggable="false"></div>
+      <span class="lb-tag lb-tag--before" id="lb-tag-before" hidden>Before</span>
+      <span class="lb-tag lb-tag--after" id="lb-tag-after" hidden>After</span>
+      <button class="lb-divider" type="button" id="lb-divider" hidden role="slider"
+              aria-label="Before and after divider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></button>
+    </div>
+
     <button class="lb-nav lb-nav--next" type="button" id="lb-next" aria-label="Next frame">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7.5 4.5L13 10l-5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
+
+    <div class="lb-bar" id="lb-bar">
+      <button class="lb-bar__btn" type="button" id="lb-zoom-out" aria-label="Zoom out" title="Zoom out  ( − )">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <button class="lb-bar__btn lb-bar__btn--text num" type="button" id="lb-zoom-reset" title="Fit to the window  ( 0 )">100%</button>
+      <button class="lb-bar__btn" type="button" id="lb-zoom-in" aria-label="Zoom in" title="Zoom in  ( + )">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <span class="lb-bar__rule" id="lb-compare-rule" hidden></span>
+      <button class="lb-bar__btn lb-bar__btn--text" type="button" id="lb-compare-btn" aria-pressed="false" hidden title="Compare with the photo it was made from  ( B )">Before / after</button>
+      <span class="lb-bar__rule"></span>
+      <button class="lb-bar__btn" type="button" id="lb-wide" aria-pressed="false" aria-label="Hide the details card" title="Hide or show the details card  ( I )">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M10 3v10"/></svg>
+      </button>
+    </div>
+
+    <div class="lb-strip" id="lb-strip" hidden></div>
   </div>
   <aside class="lightbox__side">
+    <!-- Phones only: the card is a sheet at the bottom; this opens and closes it. -->
+    <button class="lb-sheet" type="button" id="lb-sheet" aria-expanded="false" aria-label="Show details"><span></span></button>
     <div class="lightbox__head">
       <span class="lightbox__count num" id="lb-count"></span>
       <!-- Keeping and discarding are about the picture itself, so they sit up
@@ -235,7 +300,10 @@
       <!-- Reuse belongs with the thing being reused: the prompt. -->
       <div class="lightbox__labelrow">
         <span class="lightbox__label">Prompt</span>
-        <button class="btn-text" type="button" id="lb-reuse">Reuse prompt</button>
+        <span class="lightbox__labelacts">
+          <button class="btn-text" type="button" id="lb-copy">Copy</button>
+          <button class="btn-text" type="button" id="lb-reuse">Reuse prompt</button>
+        </span>
       </div>
       <p class="lightbox__prompt" id="lb-prompt"></p>
 
@@ -252,6 +320,7 @@
     <div class="lightbox__tools">
       <button class="btn-primary btn-primary--block" type="button" id="lb-download">Download</button>
       <div class="lightbox__links">
+        <button class="btn-text" type="button" id="lb-copy-image">Copy image</button>
         <button class="btn-text" type="button" id="lb-edit">Use as reference</button>
         <button class="btn-text" type="button" id="lb-again">Run again</button>
         <button class="btn-text" type="button" id="lb-download-all" hidden>Download all</button>
@@ -271,6 +340,63 @@
     </div>
   </div>
 </div>
+
+<!-- ========== What's new — shown once after each update ==========
+     Filled from /whats-new.json. Appears a few seconds after signing in, to
+     anyone who has not yet seen the latest entry, and never again until the
+     next one. Always reachable from the menu at the top right. -->
+<div class="dialog-veil" id="news-dialog" hidden>
+  <div class="dialog dialog--news" role="dialog" aria-modal="true" aria-labelledby="news-title">
+    <div class="dialog__head">
+      <div>
+        <div class="news__kicker num" id="news-date"></div>
+        <h2 class="dialog__title" id="news-title">What’s new</h2>
+      </div>
+      <button class="icon-btn" type="button" id="news-close" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="news" id="news-body"></div>
+    <div class="dialog__actions">
+      <button class="btn-primary" type="button" id="news-ok">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Keyboard shortcuts — opened with ? ========== -->
+<div class="dialog-veil" id="keys-dialog" hidden>
+  <div class="dialog dialog--keys" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+    <div class="dialog__head">
+      <h2 class="dialog__title" id="keys-title">Keyboard shortcuts</h2>
+      <button class="icon-btn" type="button" id="keys-close" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="keys">
+      <div class="keys__group">Anywhere</div>
+      <kbd>/</kbd><span>Go to the prompt</span>
+      <kbd>?</kbd><span>Show this list</span>
+      <kbd>Esc</kbd><span>Close whatever is open</span>
+      <div class="keys__group">In the prompt</div>
+      <kbd>Ctrl</kbd><kbd>Enter</kbd><span>Generate or apply</span>
+      <kbd>@</kbd><span>Refer to an attached photo</span>
+      <kbd>↑</kbd><span>Recent prompts, when the box is empty</span>
+      <div class="keys__group">On a photo chip</div>
+      <kbd>Alt</kbd><kbd>←</kbd><kbd>→</kbd><span>Move the photo</span>
+      <div class="keys__group">In the viewer</div>
+      <kbd>←</kbd><kbd>→</kbd><span>Previous and next picture</span>
+      <kbd>+</kbd><kbd>−</kbd><kbd>0</kbd><span>Zoom in, zoom out, fit</span>
+      <kbd>B</kbd><span>Before and after</span>
+      <kbd>I</kbd><span>Hide or show the details card</span>
+      <kbd>F</kbd><span>Add to the library</span>
+      <kbd>D</kbd><span>Download</span>
+    </div>
+  </div>
+</div>
+
+<!-- Small confirmations — "Added to library", "Prompt copied". Errors are never
+     shown here; they stay as the notices above the composer. -->
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
 <script src="/request-body.js"></script>
 <script src="/app.js"></script>

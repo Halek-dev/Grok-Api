@@ -39,6 +39,10 @@
   var SPEND_KEY = 'imagine-studio/spend';
   var PASS_KEY = 'imagine-studio/password';
   var THEME_KEY = 'imagine-studio/theme';
+  var ACCENT_KEY = 'imagine-studio/accent';
+  var NOTIFY_KEY = 'imagine-studio/notify';
+  var NEWS_KEY = 'imagine-studio/news-seen';
+  var studioName = 'Imagine studio';
 
   var ICONS = {
     download: '<path d="M8 2.5v8M4.8 7.6L8 10.8l3.2-3.2M3 13.5h10"/>',
@@ -48,6 +52,7 @@
     star: '<path d="M8 1.8l1.9 3.85 4.25.62-3.08 3 .73 4.23L8 11.5l-3.8 2 .73-4.23-3.08-3 4.25-.62z"/>',
     x: '<path d="M4 4l8 8M12 4l-8 8"/>',
     crop: '<path d="M4.5 1.5v10h10M1.5 4.5h10v10"/>',
+    copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>',
     user: '<path d="M8 8a2.75 2.75 0 1 0 0-5.5A2.75 2.75 0 0 0 8 8ZM2.8 13.5c.6-2.3 2.7-3.5 5.2-3.5s4.6 1.2 5.2 3.5"/>'
   };
 
@@ -61,7 +66,12 @@
       gateToggle = $('gate-password-toggle');
   var app = $('app');
   var filtersEl = $('filters');
+  var thumbEl = $('thumb');
   var spendAmount = $('spend-amount'), spendRuns = $('spend-runs'), balanceEl = $('balance');
+  var newsDialog = $('news-dialog'), newsBody = $('news-body'), newsTitle = $('news-title'), newsDate = $('news-date'),
+      newsOk = $('news-ok'), newsClose = $('news-close'), newsOpen = $('news-open');
+  var accentEl = $('accent'), notifyEl = $('notify'), keysDialog = $('keys-dialog'),
+      keysOpen = $('keys-open'), keysClose = $('keys-close');
   var whoBtn = $('who-btn'), whoPop = $('who-pop'), userName = $('user-name'), themeEl = $('theme');
   var results = $('results'), empty = $('empty'), emptyTitle = $('empty-title'),
       emptyBody = $('empty-body'), emptySeeds = $('empty-seeds');
@@ -70,10 +80,13 @@
   var rail = $('rail'), sourceList = $('source-list'), addBtn = $('dropzone'), fileInput = $('file-input');
   var planSwitch = $('plan'), planReference = $('plan-reference'), planEach = $('plan-each');
   var promptEl = $('prompt'), promptLabel = $('prompt-label'), hintEl = $('composer-hint');
-  var modelEl = $('model'), modelText = $('model-text');
-  var shapeEl = $('shape'), shapeText = $('shape-text'), shapeIcon = $('shape-icon');
-  var sizeEl = $('size'), sizeText = $('size-text'), sizePill = $('size-pill');
-  var qualityField = $('quality-field'), qualityEl = $('quality'), qualityText = $('quality-text');
+  var modelPill = $('model-pill'), modelText = $('model-text');
+  var shapePill = $('shape-pill'), shapeText = $('shape-text'), shapeIcon = $('shape-icon');
+  var sizePill = $('size-pill'), sizeText = $('size-text');
+  var qualityField = $('quality-field'), qualityText = $('quality-text');
+  var pillMenu = $('pill-menu'), promptBack = $('prompt-back'), summaryEl = $('composer-summary'),
+      historyMenu = $('history-menu');
+  var PROMPTS_KEY = 'imagine-studio/prompts';
   var framesField = $('frames-field'), framesLabel = $('frames-label'), framesValue = $('frames-value'),
       framesMinus = $('frames-minus'), framesPlus = $('frames-plus');
   var costValue = $('cost-value'), cancelBtn = $('cancel-run'), actionBtn = $('action');
@@ -83,6 +96,12 @@
       lbAgain = $('lb-again'), lbClose = $('lb-close'), lbPrev = $('lb-prev'), lbNext = $('lb-next'),
       lbSources = $('lb-sources'), lbSourcesBlock = $('lb-sources-block'), lbSourcesLabel = $('lb-sources-label'),
       lbDownloadAll = $('lb-download-all'), lbFav = $('lb-fav'), lbDelete = $('lb-delete');
+  var lbStage = $('lb-stage'), lbCanvas = $('lb-canvas'), lbCompare = $('lb-compare'), lbBase = $('lb-base'),
+      lbDivider = $('lb-divider'), lbTagBefore = $('lb-tag-before'), lbTagAfter = $('lb-tag-after'),
+      lbZoomIn = $('lb-zoom-in'), lbZoomOut = $('lb-zoom-out'), lbZoomReset = $('lb-zoom-reset'),
+      lbCompareBtn = $('lb-compare-btn'), lbCompareRule = $('lb-compare-rule'), lbWide = $('lb-wide'),
+      lbStrip = $('lb-strip'), lbSheet = $('lb-sheet'), lbSide = document.querySelector('.lightbox__side'),
+      lbCopy = $('lb-copy'), lbCopyImage = $('lb-copy-image'), toastsEl = $('toasts');
   var consentDialog = $('consent-dialog'), consentOk = $('consent-ok'), consentCancel = $('consent-cancel');
 
   // -------------------------------------------------------------------------
@@ -106,6 +125,7 @@
     plan: 'reference',
     name: '',
     filter: 'all',
+    thumb: 3,          // picture size, 1 (dense) to 5 (large)
     // [{ dataUri, original, originalSize, name, size, width, height, crop }] in
     // the order they will be sent. dataUri is what goes out — the crop, if any.
     sources: []
@@ -412,36 +432,29 @@
   // the current value, so the options can carry detail (prices, pixel sizes)
   // while the pill itself stays short.
   // -------------------------------------------------------------------------
-  function option(value, text, disabled) {
-    var opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = text;
-    if (disabled) opt.disabled = true;
-    return opt;
-  }
-
+  // Which model is in use. A retired one cannot be, so the default takes over
+  // — and that is remembered, so the notice can explain why.
   function buildModelOptions() {
     var prices = config.prices || {};
     var ids = Object.keys(prices);
-    // Live models first in declared order; a retired one drops to the bottom,
-    // disabled, so the list still explains where it went.
     var live = ids.filter(function (id) { return !modelIsRetired(id); });
-    var dead = ids.filter(modelIsRetired);
-
-    modelEl.innerHTML = '';
-    live.concat(dead).forEach(function (id) {
-      var p = prices[id];
-      var retired = modelIsRetired(id);
-      modelEl.appendChild(option(id, p.label + (retired ? ' — retired' : p.isDefault ? ' — default' : ''), retired));
-    });
-
     if (!prices[state.model] || modelIsRetired(state.model)) {
-      // Moving someone off a model they had chosen is not something to do
-      // silently — remember it so the notice can explain why.
       if (prices[state.model] && modelIsRetired(state.model)) retiredFallback = state.model;
       state.model = live.filter(function (id) { return prices[id].isDefault; })[0] || live[0] || ids[0];
     }
-    modelEl.value = state.model;
+  }
+
+  function ratioBox(node, shape) {
+    var parts = shape === 'auto' ? [1, 1] : shape.split(':').map(Number);
+    var long = 14;
+    node.style.width = (parts[0] >= parts[1] ? long : Math.max(5, Math.round(long * parts[0] / parts[1]))) + 'px';
+    node.style.height = (parts[1] >= parts[0] ? long : Math.max(5, Math.round(long * parts[1] / parts[0]))) + 'px';
+    node.style.borderStyle = shape === 'auto' ? 'dashed' : 'solid';
+  }
+
+  function qualityTiers() {
+    var p = priceEntry(state.model);
+    return p && p.tiers && !p.tiers['default'] && acceptsQuality(state.model) ? Object.keys(p.tiers) : null;
   }
 
   function renderPills() {
@@ -449,48 +462,25 @@
     var p = priceEntry(state.model);
     modelText.textContent = p ? p.label : state.model;
 
-    // Shape. On an edit, auto means the shape of the first photo — say so,
-    // because that is the one case where "auto" is a specific answer.
+    // On an edit, auto means the shape of the first photo — say so, because
+    // that is the one case where "auto" is a specific answer.
     var shape = currentShape();
-    shapeEl.innerHTML = '';
-    SHAPES.forEach(function (s) {
-      shapeEl.appendChild(option(s, s === 'auto' ? (m === 'edit' ? 'Same as the base photo' : 'Auto — the model chooses') : s));
-    });
-    shapeEl.value = shape;
     shapeText.textContent = shape === 'auto' ? (m === 'edit' ? 'As base' : 'Auto') : shape;
-    var parts = shape === 'auto' ? [1, 1] : shape.split(':').map(Number);
-    var long = 14, w = parts[0] >= parts[1] ? long : Math.max(5, Math.round(long * parts[0] / parts[1])),
-        h = parts[1] >= parts[0] ? long : Math.max(5, Math.round(long * parts[1] / parts[0]));
-    shapeIcon.style.width = w + 'px';
-    shapeIcon.style.height = h + 'px';
-    shapeIcon.style.borderStyle = shape === 'auto' ? 'dashed' : 'solid';
+    ratioBox(shapeIcon, shape);
 
-    // Size.
     var res = currentResolution();
-    sizeEl.innerHTML = '';
-    RESOLUTIONS.forEach(function (r) {
-      sizeEl.appendChild(option(r, r.toUpperCase() + ' · ' + sizeLabel(shape, r)));
-    });
-    sizeEl.value = res;
     sizeText.textContent = res.toUpperCase();
     // 1k was the weakest transfer of the resolutions tried.
     sizePill.classList.toggle('is-warning', isReference() && res === '1k');
 
     // Quality — only for models that accept it; sending it to any other is a 400.
-    var tiers = p && p.tiers && !p.tiers['default'] ? Object.keys(p.tiers) : null;
-    qualityField.hidden = !(acceptsQuality(state.model) && tiers);
-    if (!qualityField.hidden) {
-      var keys = ['auto'].concat(tiers);
-      if (keys.indexOf(state.quality) === -1) state.quality = 'auto';
-      qualityEl.innerHTML = '';
-      keys.forEach(function (q) {
-        var per = perImage(state.model, q, res, m);
-        var label = q.charAt(0).toUpperCase() + q.slice(1);
-        qualityEl.appendChild(option(q, per == null ? label : label + ' — ' + money(per) + ' an image'));
-      });
-      qualityEl.value = state.quality;
+    var tiers = qualityTiers();
+    qualityField.hidden = !tiers;
+    if (tiers) {
+      if (['auto'].concat(tiers).indexOf(state.quality) === -1) state.quality = 'auto';
       qualityText.textContent = state.quality.charAt(0).toUpperCase() + state.quality.slice(1) + ' quality';
     }
+    [modelPill, shapePill, sizePill, qualityField].forEach(function (b) { b.disabled = busy; });
 
     // Frames on a generation, variants on an edit. Absent when several photos
     // are edited apart — that is one image per photo.
@@ -503,7 +493,157 @@
     framesPlus.disabled = busy || count >= maxCount();
     framesMinus.setAttribute('aria-label', 'Fewer ' + word + 's');
     framesPlus.setAttribute('aria-label', 'More ' + word + 's');
+
+    summaryEl.textContent = (p ? p.label : state.model) + ' · ' + (shape === 'auto' ? 'Auto' : shape) + ' · ' + res.toUpperCase();
   }
+
+  // -------------------------------------------------------------------------
+  // The menu a pill opens. Every row says what it costs, so the choice is made
+  // with the price in view rather than discovered afterwards.
+  // -------------------------------------------------------------------------
+  var openMenu = null;   // the pill whose menu is open, or null
+
+  function menuRow(opt) {
+    var row = el('button', 'pillmenu__row');
+    row.type = 'button';
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(Boolean(opt.current)));
+    row.disabled = Boolean(opt.disabled);
+    var main = el('span', 'pillmenu__main');
+    main.appendChild(el('span', 'pillmenu__label', opt.label));
+    if (opt.note) main.appendChild(el('span', 'pillmenu__note' + (opt.warn ? ' is-warning' : ''), opt.note));
+    row.appendChild(main);
+    if (opt.price) row.appendChild(el('span', 'pillmenu__price num', opt.price));
+    row.addEventListener('click', function () { opt.pick(); });
+    return row;
+  }
+
+  function buildMenu(kind) {
+    var m = mode(), res = currentResolution();
+    var per = function (model, q, r) { var v = perImage(model, q, r, m); return v == null ? '' : money(v); };
+    pillMenu.innerHTML = '';
+
+    if (kind === 'model') {
+      pillMenu.appendChild(el('div', 'pillmenu__title', 'Model'));
+      var prices = config.prices || {};
+      var ids = Object.keys(prices);
+      ids.filter(function (id) { return !modelIsRetired(id); }).concat(ids.filter(modelIsRetired)).forEach(function (id) {
+        var p = prices[id], r = retirementFor(id);
+        var note = r && r.retired ? 'Retired on ' + r.dateLabel
+          : r ? 'Retires in ' + r.days + ' days, on ' + r.dateLabel
+          : p.isDefault ? 'The default — the model xAI is keeping, and the only one that combines photos'
+          : '';
+        var from = per(id, 'auto', res);
+        pillMenu.appendChild(menuRow({
+          label: p.label, note: note, warn: Boolean(r), price: from ? from + ' an image' : '',
+          current: id === state.model, disabled: Boolean(r && r.retired),
+          pick: function () { retiredFallback = null; state.model = id; buildModelOptions(); closeMenu(true); renderRail(); }
+        }));
+      });
+    }
+
+    if (kind === 'shape') {
+      pillMenu.appendChild(el('div', 'pillmenu__title', m === 'edit' ? 'Shape of the result' : 'Shape'));
+      var grid = el('div', 'pillmenu__grid');
+      SHAPES.forEach(function (s) {
+        var tile = el('button', 'pillmenu__tile');
+        tile.type = 'button';
+        tile.setAttribute('role', 'option');
+        tile.setAttribute('aria-selected', String(s === currentShape()));
+        var box = el('span', 'ratio');
+        ratioBox(box, s);
+        // Drawn larger here than in the pill.
+        box.style.width = (parseFloat(box.style.width) * 1.6) + 'px';
+        box.style.height = (parseFloat(box.style.height) * 1.6) + 'px';
+        tile.appendChild(box);
+        var text = s === 'auto' ? (m === 'edit' ? 'As base' : 'Auto') : s;
+        tile.appendChild(el('span', 'num', text));
+        tile.title = s === 'auto' ? (m === 'edit' ? 'The same shape as the base photo' : 'The model chooses') : sizeLabel(s, res) + ' at ' + res.toUpperCase();
+        tile.addEventListener('click', function () {
+          if (m === 'edit') state.editShape = s; else state.shape = s;
+          closeMenu(true); renderRail();
+        });
+        grid.appendChild(tile);
+      });
+      pillMenu.appendChild(grid);
+    }
+
+    if (kind === 'size') {
+      pillMenu.appendChild(el('div', 'pillmenu__title', 'Size'));
+      RESOLUTIONS.forEach(function (r) {
+        var weak = r === '1k' && isReference();
+        pillMenu.appendChild(menuRow({
+          label: r.toUpperCase() + ' · ' + sizeLabel(currentShape(), r),
+          note: weak ? 'Kept the least of a likeness in testing' : r === '2k' ? 'Sharper, and holds a face better' : 'Quicker and cheaper — good for exploring',
+          warn: weak, price: per(state.model, state.quality, r) ? per(state.model, state.quality, r) + ' an image' : '',
+          current: r === res,
+          pick: function () { if (m === 'edit') state.editResolution = r; else state.resolution = r; closeMenu(true); renderRail(); }
+        }));
+      });
+    }
+
+    if (kind === 'quality') {
+      pillMenu.appendChild(el('div', 'pillmenu__title', 'Quality'));
+      var p2 = priceEntry(state.model);
+      ['auto'].concat(qualityTiers() || []).forEach(function (q) {
+        var auto = q === 'auto' && p2 && p2.autoQuality ? p2.autoQuality[m === 'edit' ? 'edit' : 'generate'] : null;
+        pillMenu.appendChild(menuRow({
+          label: q.charAt(0).toUpperCase() + q.slice(1),
+          note: auto ? 'xAI decides — bills as ' + auto + ' for ' + (m === 'edit' ? 'an edit' : 'a generation') : q === 'low' ? 'Faster; fine for drafts' : 'Slower; more detail',
+          price: per(state.model, q, res) ? per(state.model, q, res) + ' an image' : '',
+          current: q === state.quality,
+          pick: function () { state.quality = q; closeMenu(true); renderRail(); }
+        }));
+      });
+    }
+  }
+
+  function showMenu(pill) {
+    if (busy) return;
+    closeMention(); closeHistory();
+    if (openChip >= 0) { openChip = -1; renderChipPanel(); renderSource(); }
+    openMenu = pill;
+    buildMenu(pill.dataset.menu);
+    pillMenu.hidden = false;
+    pill.setAttribute('aria-expanded', 'true');
+    // Just above the pill, kept inside the composer.
+    var host = rail.getBoundingClientRect(), at = pill.getBoundingClientRect();
+    pillMenu.style.left = Math.max(8, Math.min(at.left - host.left, host.width - pillMenu.offsetWidth - 8)) + 'px';
+    pillMenu.style.bottom = (host.bottom - at.top + 8) + 'px';
+    var cur = pillMenu.querySelector('[aria-selected="true"]:not(:disabled)') || pillMenu.querySelector('button:not(:disabled)');
+    if (cur) cur.focus();
+  }
+
+  function closeMenu(refocus) {
+    if (!openMenu) return;
+    var pill = openMenu;
+    openMenu = null;
+    pillMenu.hidden = true;
+    pill.setAttribute('aria-expanded', 'false');
+    if (refocus) pill.focus();
+  }
+
+  [modelPill, shapePill, sizePill, qualityField].forEach(function (pill) {
+    pill.addEventListener('click', function () { if (openMenu === pill) closeMenu(true); else { closeMenu(false); showMenu(pill); } });
+  });
+  pillMenu.addEventListener('keydown', function (e) {
+    var items = Array.prototype.slice.call(pillMenu.querySelectorAll('button:not(:disabled)'));
+    var at = items.indexOf(document.activeElement);
+    var grid = Boolean(pillMenu.querySelector('.pillmenu__grid'));
+    var step = { ArrowDown: grid ? 5 : 1, ArrowUp: grid ? -5 : -1, ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (step) {
+      e.preventDefault();
+      e.stopPropagation();
+      var next = items[Math.max(0, Math.min(items.length - 1, at + step))];
+      if (next) next.focus();
+    } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
+    else if (e.key === 'Tab') closeMenu(false);
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (openMenu && !pillMenu.contains(e.target) && !openMenu.contains(e.target)) closeMenu(false);
+  });
 
   // -------------------------------------------------------------------------
   // Photo chips
@@ -532,6 +672,11 @@
 
   function moveSource(from, to) {
     if (to < 0 || to >= state.sources.length || from === to) return;
+    // Where every chip is now, so each can be slid from there to its new place.
+    var was = new Map();
+    Array.prototype.slice.call(sourceList.querySelectorAll('.chip')).forEach(function (n, i) {
+      was.set(state.sources[i], n.getBoundingClientRect());
+    });
     var item = state.sources.splice(from, 1)[0];
     state.sources.splice(to, 0, item);
     if (openChip === from) openChip = to;
@@ -539,6 +684,13 @@
     // Only the base may stay uncropped-by-rule; a crop made on a reference is
     // still a valid crop if it becomes the base, so it is left alone.
     renderRail();
+    Array.prototype.slice.call(sourceList.querySelectorAll('.chip')).forEach(function (n, i) {
+      var old = was.get(state.sources[i]);
+      if (!old || !n.animate) return;
+      var now = n.getBoundingClientRect();
+      var dx = old.left - now.left, dy = old.top - now.top;
+      if (dx || dy) n.animate([{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'none' }], { duration: 220, easing: 'ease-out' });
+    });
   }
 
   function removeSource(i) {
@@ -596,6 +748,16 @@
 
       var label = chipLabel(i);
       if (label) chip.appendChild(el('span', 'chip__badge', label));
+
+      var preview = el('div', 'chip__preview');
+      preview.setAttribute('aria-hidden', 'true');
+      var big = document.createElement('img');
+      big.src = src.dataUri;
+      big.alt = '';
+      preview.appendChild(big);
+      preview.appendChild(el('b', null, (isBase ? 'Base · ' : count > 1 ? 'Photo ' + (i + 1) + ' · ' : '') + src.name));
+      preview.appendChild(el('span', 'num', dimsText(src)));
+      chip.appendChild(preview);
       if (src.crop) {
         var mark = el('span', 'chip__crop');
         mark.title = 'Cropped';
@@ -1011,6 +1173,36 @@
   function autosize() {
     promptEl.style.height = 'auto';
     promptEl.style.height = Math.min(200, Math.max(44, promptEl.scrollHeight)) + 'px';
+    paintPromptBack();
+  }
+
+  // The copy of the prompt that lies behind it, with every "photo N" given a
+  // ground. A number with no photo behind it is marked differently: the model
+  // would be told to look at something that is not there.
+  function paintPromptBack() {
+    var esc = function (t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    var count = state.sources.length;
+    var html = esc(promptEl.value).replace(/\b(photo|image)\s?(\d{1,2})\b/gi, function (whole, word, n) {
+      if (!count) return whole;
+      return '<mark' + (Number(n) >= 1 && Number(n) <= count ? '' : ' class="is-missing"') + '>' + whole + '</mark>';
+    });
+    // A trailing newline needs something after it to take up its line.
+    promptBack.innerHTML = html + (/\n$/.test(promptEl.value) ? '&nbsp;' : '');
+    promptBack.scrollTop = promptEl.scrollTop;
+  }
+
+  // Resting as a slim bar: nothing typed, nothing attached, nothing open, and
+  // the focus somewhere else.
+  function isIdle() {
+    return !busy && !state.sources.length && !promptEl.value.trim() && !attention && !openMenu &&
+      !dock.contains(document.activeElement) && lightbox.hidden;
+  }
+  function renderIdle() {
+    var idle = isIdle();
+    if (rail.classList.contains('is-idle') === idle) return;
+    rail.classList.toggle('is-idle', idle);
+    dock.classList.toggle('is-idle', idle);
+    if (!idle) autosize();
   }
 
   // Recompute on every change.
@@ -1028,6 +1220,8 @@
     renderSource();
     renderChipPanel();
     renderAction();
+    paintPromptBack();
+    renderIdle();
     persist();
   }
 
@@ -1036,7 +1230,7 @@
       model: state.model, quality: state.quality,
       shape: state.shape, resolution: state.resolution, frames: state.frames,
       editShape: state.editShape, editResolution: state.editResolution, variants: state.variants,
-      name: state.name, filter: state.filter
+      name: state.name, filter: state.filter, thumb: state.thumb
     });
   }
 
@@ -1053,6 +1247,31 @@
     box.appendChild(el('div', 'notice__title num', title));
     box.appendChild(el('div', 'notice__body num', body));
     runError.appendChild(box);
+  }
+
+  // A small confirmation, bottom left, gone in a moment. Never used for an
+  // error — those stay as notices until dealt with. `action` adds one link,
+  // such as Undo, and keeps the toast up for as long as the link is good.
+  function toast(text, action) {
+    var node = el('div', 'toast');
+    node.appendChild(el('span', null, text));
+    var gone = false;
+    function leave() {
+      if (gone) return;
+      gone = true;
+      node.classList.add('is-leaving');
+      setTimeout(function () { node.remove(); }, 220);
+    }
+    if (action) {
+      var b = el('button', 'btn-text', action.label);
+      b.type = 'button';
+      b.addEventListener('click', function () { leave(); action.run(); });
+      node.appendChild(b);
+    }
+    toastsEl.appendChild(node);
+    while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
+    setTimeout(leave, action && action.ms ? action.ms : 2200);
+    return leave;
   }
 
   function describeFailure(payload, status) {
@@ -1171,37 +1390,249 @@
       var res = await fetch('/api/runs?favourites=1&limit=500', { headers: authHeaders({}) });
       if (!res.ok) return;
       var payload = await res.json();
-      var have = {};
-      runs.forEach(function (r) { have[r.id] = true; have['saved-' + r.id] = true; });
-      var fresh = (payload.runs || []).map(restoreRun).filter(function (r) { return !have[r.id]; });
       libraryLoaded = true;
-      if (!fresh.length) return;
-      runs = runs.concat(fresh).sort(function (a, b) { return b.startedAt - a.startedAt; });
-      if (state.filter === 'fav') renderRuns();
+      // Favourites from long ago must not move the paging mark: that tracks
+      // how far back the ordinary gallery has been read.
+      var mark = oldestStamp;
+      var added = takeRestored(payload.runs || []);
+      oldestStamp = mark;
+      if (added && state.filter === 'fav') renderRuns();
     } catch (err) { /* the library shows what is already loaded */ }
   }
 
-  function renderLibrary() {
-    var wall = [];
-    runs.forEach(function (run) {
-      run.frames.forEach(function (f, i) { if (f.image && f.image.favourite) wall.push([run, i]); });
+  // Picture sizes for the slider, as the narrowest a column may be.
+  var THUMB_PX = [0, 170, 230, 300, 380, 480];
+  function applyThumb() {
+    document.documentElement.style.setProperty('--thumb', THUMB_PX[state.thumb] + 'px');
+    thumbEl.value = state.thumb;
+    scheduleLayout();
+  }
+
+  // Masonry. The wall is a grid of 4px rows; each frame is told how many rows
+  // its height needs. Reading order stays left-to-right, newest first, and no
+  // picture is cropped to fit its neighbours.
+  var ROW = 4;
+  var layoutQueued = false;
+  function scheduleLayout() {
+    if (layoutQueued) return;
+    layoutQueued = true;
+    requestAnimationFrame(function () {
+      layoutQueued = false;
+      Array.prototype.slice.call(results.querySelectorAll('.wall .frame')).forEach(function (f) {
+        f.style.gridRowEnd = 'auto';
+      });
+      Array.prototype.slice.call(results.querySelectorAll('.wall .frame')).forEach(function (f) {
+        var h = f.getBoundingClientRect().height;
+        var gap = parseFloat(getComputedStyle(f).marginBottom) || 0;
+        f.style.gridRowEnd = 'span ' + Math.max(1, Math.ceil((h + gap) / ROW));
+      });
     });
-    if (!wall.length) return 0;
-    var card = el('article', 'run');
+  }
+  if (window.ResizeObserver) new ResizeObserver(scheduleLayout).observe(results);
+
+  function wall(pairs) {
+    var node = el('div', 'wall');
+    pairs.forEach(function (p) { node.appendChild(renderFrame(p[0], p[1])); });
+    return node;
+  }
+
+  function renderLibrary() {
+    var pairs = [];
+    runs.forEach(function (run) {
+      run.frames.forEach(function (f, i) { if (f.image && f.image.favourite) pairs.push([run, i]); });
+    });
+    if (!pairs.length) return 0;
     var head = el('div', 'library__head');
     head.appendChild(el('h2', 'library__title', 'Library'));
-    head.appendChild(el('span', 'library__note num', wall.length + (wall.length === 1 ? ' favourite' : ' favourites') +
+    head.appendChild(el('span', 'library__note num', pairs.length + (pairs.length === 1 ? ' favourite' : ' favourites') +
       ' · kept for good, never cleared to make room'));
-    card.appendChild(head);
-    var grid = el('div', 'run__grid');
-    wall.forEach(function (pair) { grid.appendChild(renderFrame(pair[0], pair[1])); });
-    card.appendChild(grid);
-    results.insertBefore(card, empty);
-    return wall.length;
+    results.insertBefore(head, empty);
+    results.insertBefore(wall(pairs), empty);
+    return pairs.length;
+  }
+
+  // Grey frames while the history is on its way, so the page is never blank.
+  var historyLoading = false;
+  function renderSkeleton() {
+    var node = el('div', 'wall');
+    ['3 / 4', '1 / 1', '9 / 16', '4 / 3', '1 / 1', '3 / 4', '16 / 9', '9 / 16'].forEach(function (r) {
+      var f = el('div', 'frame frame--skeleton');
+      f.style.setProperty('--ratio', r);
+      node.appendChild(f);
+    });
+    results.insertBefore(node, empty);
+  }
+
+  // -------------------------------------------------------------------------
+  // Prompts — /asset. Every prompt the team has used, kept on the server, a
+  // card each: use it, copy it, star it, delete it.
+  // -------------------------------------------------------------------------
+  var prompts = null;          // null until first loaded
+  var promptSearch = '';
+  var promptFavOnly = false;
+  var openCards = {};
+
+  async function loadPrompts() {
+    try {
+      var res = await fetch('/api/prompts', { headers: authHeaders({}) });
+      if (res.status === 401) { lockOut(); return; }
+      if (!res.ok) throw new Error('failed');
+      prompts = (await res.json()).prompts || [];
+    } catch (err) {
+      prompts = prompts || [];
+      showError('The prompts could not be loaded', 'The server did not answer. Check it is still running, then open Prompts again.', 'warning');
+    }
+    if (state.filter === 'assets') renderRuns();
+  }
+
+  function promptAction(path, body) {
+    return fetch('/api/prompts/' + path, {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body)
+    }).then(function (res) {
+      if (res.status === 401) { lockOut(); throw new Error('locked'); }
+      if (!res.ok) throw new Error('failed');
+      return res.json();
+    });
+  }
+
+  function sortPrompts() {
+    prompts.sort(function (x, y) {
+      return (Number(y.favourite) - Number(x.favourite)) || String(y.lastUsedAt).localeCompare(String(x.lastUsedAt));
+    });
+  }
+
+  function copyText(text, said) {
+    var ok = function () { toast(said); };
+    var no = function () { toast('This browser would not allow copying'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, no);
+    else no();
+  }
+
+  function promptCard(p) {
+    var card = el('article', 'pcard' + (p.favourite ? ' is-fav' : '') + (openCards[p.id] ? ' is-open' : ''));
+    card.appendChild(el('p', 'pcard__text', p.text));
+    if (p.text.length > 260) {
+      var more = el('button', 'btn-text pcard__more', openCards[p.id] ? 'Show less' : 'Show all');
+      more.type = 'button';
+      more.addEventListener('click', function () { openCards[p.id] = !openCards[p.id]; renderRuns(); });
+      card.appendChild(more);
+    }
+    var used = new Date(Date.parse(p.lastUsedAt) || Date.now());
+    card.appendChild(el('div', 'pcard__meta num',
+      (p.mode === 'edit' ? 'Edit' : 'Generate') + ' · used ' + (p.uses === 1 ? 'once' : p.uses + ' times') +
+      ' · ' + dayLabel(used.getTime()) + (p.user ? ' · ' + p.user : '')));
+
+    var acts = el('div', 'pcard__acts');
+    var use = el('button', 'btn-quiet pcard__use', 'Use this prompt');
+    use.type = 'button';
+    use.addEventListener('click', function () {
+      if (busy) return;
+      promptEl.value = p.text;
+      autosize();
+      renderAction();
+      renderIdle();
+      promptEl.focus();
+      promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
+      toast(p.mode === 'edit' ? 'Prompt added — attach the photos it refers to' : 'Prompt added to the box');
+    });
+    acts.appendChild(use);
+
+    var copy = el('button', 'icon-btn');
+    copy.type = 'button';
+    copy.title = 'Copy';
+    copy.setAttribute('aria-label', 'Copy this prompt');
+    copy.appendChild(icon('copy', 16));
+    copy.addEventListener('click', function () { copyText(p.text, 'Prompt copied'); });
+    acts.appendChild(copy);
+
+    var star = el('button', 'icon-btn icon-btn--star');
+    star.type = 'button';
+    star.setAttribute('aria-pressed', String(Boolean(p.favourite)));
+    star.setAttribute('aria-label', p.favourite ? 'Remove from favourites' : 'Add to favourites');
+    star.title = p.favourite ? 'A favourite — kept first, and never cleared' : 'Add to favourites';
+    star.appendChild(icon('star', 16));
+    star.addEventListener('click', function () {
+      promptAction('favourite', { id: p.id, favourite: !p.favourite }).then(function () {
+        p.favourite = !p.favourite;
+        sortPrompts();
+        renderRuns();
+        toast(p.favourite ? 'Added to favourites' : 'Removed from favourites');
+      }, function () { toast('That change could not be saved'); });
+    });
+    acts.appendChild(star);
+
+    var del = el('button', 'icon-btn icon-btn--danger');
+    del.type = 'button';
+    del.title = 'Delete — you can undo for a few seconds';
+    del.setAttribute('aria-label', 'Delete this prompt');
+    del.appendChild(icon('trash', 16));
+    del.addEventListener('click', function () {
+      promptAction('delete', { id: p.id }).then(function () {
+        prompts = prompts.filter(function (x) { return x.id !== p.id; });
+        renderRuns();
+        toast('Prompt deleted', { label: 'Undo', ms: UNDO_MS, run: function () {
+          promptAction('restore', { prompt: p }).then(function (out) {
+            if (out.prompt) { prompts.push(out.prompt); sortPrompts(); renderRuns(); toast('Prompt restored'); }
+          }, function () { toast('The prompt could not be restored'); });
+        } });
+      }, function () { toast('The prompt could not be deleted'); });
+    });
+    acts.appendChild(del);
+    card.appendChild(acts);
+    return card;
+  }
+
+  function renderAssets() {
+    if (prompts === null) { loadPrompts(); return 1; }   // cards arrive in a moment
+    var head = el('div', 'assets__head');
+    head.appendChild(el('h2', 'assets__title', 'Prompts'));
+    var needle = promptSearch.trim().toLowerCase();
+    var list = prompts.filter(function (p) {
+      return (!promptFavOnly || p.favourite) && (!needle || p.text.toLowerCase().indexOf(needle) !== -1 || String(p.user || '').toLowerCase().indexOf(needle) !== -1);
+    });
+    head.appendChild(el('span', 'assets__note num', list.length === prompts.length
+      ? prompts.length + (prompts.length === 1 ? ' prompt' : ' prompts') + ' · saved each time one is used'
+      : list.length + ' of ' + prompts.length));
+
+    var tools = el('div', 'assets__tools');
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'input assets__search';
+    search.placeholder = 'Search prompts';
+    search.setAttribute('aria-label', 'Search prompts');
+    search.value = promptSearch;
+    search.addEventListener('input', function () {
+      promptSearch = search.value;
+      var at = search.selectionStart;
+      renderRuns();
+      var again = results.querySelector('.assets__search');
+      if (again) { again.focus(); again.setSelectionRange(at, at); }
+    });
+    tools.appendChild(search);
+    var seg = el('div', 'seg seg--small');
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-label', 'Which prompts');
+    [['All', false], ['Favourites', true]].forEach(function (pair) {
+      var b = el('button', 'seg__btn', pair[0]);
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(promptFavOnly === pair[1]));
+      b.addEventListener('click', function () { promptFavOnly = pair[1]; renderRuns(); });
+      seg.appendChild(b);
+    });
+    tools.appendChild(seg);
+    head.appendChild(tools);
+    results.insertBefore(head, empty);
+
+    if (!list.length) return prompts.length ? -1 : 0;
+    var grid = el('div', 'assets');
+    list.forEach(function (p) { grid.appendChild(promptCard(p)); });
+    results.insertBefore(grid, empty);
+    return list.length;
   }
 
   function renderRuns() {
-    Array.prototype.slice.call(results.querySelectorAll('.run, .day')).forEach(function (n) { n.remove(); });
+    Array.prototype.slice.call(results.querySelectorAll('.wall, .day, .library__head, .more, .assets, .assets__head')).forEach(function (n) { n.remove(); });
 
     // Forget anything selected that is no longer on the page, so the count in
     // the bar can never claim more than exists.
@@ -1211,16 +1642,42 @@
     });
     Array.from(selected).forEach(function (id) { if (!live[id]) selected.delete(id); });
 
-    var shown = 0, lastDay = null;
+    var shown = 0;
+    if (state.filter === 'assets') {
+      shown = renderAssets();
+      empty.hidden = shown !== 0 && shown !== -1;
+      emptySeeds.hidden = true;
+      emptyTitle.textContent = shown === -1 ? 'No prompt matches' : 'No prompts yet';
+      emptyBody.textContent = shown === -1
+        ? 'Try fewer words, or switch back to All.'
+        : 'Every prompt you generate or edit with is saved here, for the whole team, ready to copy or use again.';
+      renderSelectionBar();
+      return;
+    }
     if (state.filter === 'fav') shown = renderLibrary();
-    else runs.forEach(function (run) {
-      var idx = visibleIndexes(run);
-      if (!idx.length) return;
-      var day = dayLabel(run.startedAt);
-      if (day !== lastDay) { results.insertBefore(el('div', 'day', day), empty); lastDay = day; }
-      results.insertBefore(renderRun(run, idx), empty);
-      shown++;
-    });
+    else {
+      // One wall per day: every frame of every run made that day, in order.
+      var days = [], byDay = {};
+      runs.forEach(function (run) {
+        var idx = visibleIndexes(run);
+        if (!idx.length) return;
+        var day = dayLabel(run.startedAt);
+        if (!byDay[day]) { byDay[day] = []; days.push(day); }
+        idx.forEach(function (i) { byDay[day].push([run, i]); });
+        shown++;
+      });
+      days.forEach(function (day) {
+        results.insertBefore(el('div', 'day', day), empty);
+        results.insertBefore(wall(byDay[day]), empty);
+      });
+      if (shown && !historyDone) {
+        var more = el('div', 'more', loadingOlder ? 'Loading older pictures' : '');
+        results.insertBefore(more, empty);
+        if (moreWatcher) moreWatcher.observe(more);
+      }
+    }
+
+    if (!shown && historyLoading) { renderSkeleton(); shown = 1; }
 
     empty.hidden = shown > 0;
     if (!shown) {
@@ -1240,56 +1697,81 @@
       }
     }
     renderSelectionBar();
+    scheduleLayout();
   }
 
-  // A run in the gallery is its frames and nothing else. What was asked for,
-  // what it was made from, what it cost and what can be done with it are all on
-  // the viewer's card, one click away.
-  function renderRun(run, idx) {
-    var card = el('article', 'run');
-    card.dataset.runId = run.id;
-    var grid = el('div', 'run__grid');
-    idx.forEach(function (i) { grid.appendChild(renderFrame(run, i)); });
-    card.appendChild(grid);
-    return card;
+  // Point at a picture and its run-mates outline themselves. One listener on
+  // the gallery, not one per frame.
+  function kin(target, on) {
+    var f = target && target.closest ? target.closest('.frame') : null;
+    if (!f || !f.dataset.run) return;
+    var mates = results.querySelectorAll('.frame[data-run="' + f.dataset.run + '"]');
+    if (mates.length < 2) return;
+    Array.prototype.slice.call(mates).forEach(function (m) { m.classList.toggle('is-kin', on && m !== f); });
   }
+  results.addEventListener('mouseover', function (e) { kin(e.target, true); });
+  results.addEventListener('mouseout', function (e) { kin(e.target, false); });
+  results.addEventListener('focusin', function (e) { kin(e.target, true); });
+  results.addEventListener('focusout', function (e) { kin(e.target, false); });
 
-  // Deletion cannot be undone, so the button asks a second time in place rather
-  // than opening a dialog.
-  var CONFIRM_MS = 4000;
-  function armConfirm(btn, idle, armedText, onConfirm) {
-    var armed = false, timer = null;
-    function disarm() {
-      if (!armed) return;
-      armed = false;
-      idle();
-      btn.classList.remove('is-armed', 'btn-text--confirm');
-      if (timer) { clearTimeout(timer); timer = null; }
+  // Older history arrives as the bottom of the page comes into view.
+  var historyDone = true, loadingOlder = false, oldestStamp = null;
+  var PAGE = 40;
+  var moreWatcher = window.IntersectionObserver ? new IntersectionObserver(function (entries) {
+    if (entries.some(function (en) { return en.isIntersecting; })) loadOlder();
+  }, { rootMargin: '600px' }) : null;
+
+  async function loadOlder() {
+    if (historyDone || loadingOlder || !oldestStamp || state.filter === 'fav') return;
+    loadingOlder = true;
+    try {
+      var res = await fetch('/api/runs?limit=' + PAGE + '&before=' + encodeURIComponent(oldestStamp), { headers: authHeaders({}) });
+      if (!res.ok) { historyDone = true; return; }
+      var list = (await res.json()).runs || [];
+      takeRestored(list);
+      if (list.length < PAGE) historyDone = true;
+    } catch (err) {
+      historyDone = true;
+    } finally {
+      loadingOlder = false;
+      renderRuns();
     }
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      if (armed) { disarm(); onConfirm(); return; }
-      armed = true;
-      btn.textContent = armedText;
-      btn.classList.add('is-armed', 'btn-text--confirm');
-      timer = setTimeout(disarm, CONFIRM_MS);
+  }
+
+  // Adds runs read from the server, skipping any already on the page, and
+  // remembers how far back the page now reaches.
+  function takeRestored(list) {
+    var have = {};
+    runs.forEach(function (r) { have[r.id] = true; have['saved-' + r.id] = true; });
+    list.forEach(function (r) {
+      if (r.timestamp && (!oldestStamp || r.timestamp < oldestStamp)) oldestStamp = r.timestamp;
     });
-    btn.addEventListener('blur', disarm);
-    return disarm;
+    var fresh = list.map(restoreRun).filter(function (r) { return !have[r.id]; });
+    if (fresh.length) runs = runs.concat(fresh).sort(function (x, y) { return y.startedAt - x.startedAt; });
+    return fresh.length;
   }
 
   function renderFrame(run, index) {
     var frame = run.frames[index];
     var wrap = el('div', 'frame');
     wrap.dataset.frameFor = run.id + ':' + index;
-    var ratio = run.ratio || aspectRatioCss(run.shape);
+    wrap.dataset.run = run.id;
+    // What the picture really measured, once known, beats what was asked for.
+    var ratio = (frame.image && frame.image.ratio) || run.ratio || aspectRatioCss(run.shape);
     if (ratio) wrap.style.setProperty('--ratio', ratio);
     var n = index + 1;
 
     // Waiting. Only the frame actually being worked on pulses.
     if (frame.status === 'running' || frame.status === 'queued') {
       var running = frame.status === 'running';
-      wrap.appendChild(el('div', 'frame__placeholder' + (running ? ' is-running' : ''), running ? 'Rendering' : 'Queued'));
+      var ph = el('div', 'frame__placeholder' + (running ? ' is-running' : ''));
+      if (running) {
+        var ring = document.createElement('span');
+        ring.innerHTML = '<svg class="ring" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="12"/><path d="M15 3a12 12 0 0 1 10.4 18"/></svg>';
+        ph.appendChild(ring.firstChild);
+      }
+      ph.appendChild(el('span', null, running ? 'Rendering' : 'Queued'));
+      wrap.appendChild(ph);
       return wrap;
     }
 
@@ -1325,7 +1807,13 @@
     img.loading = 'lazy';
     // Record what xAI actually produced: the only truthful source for the size.
     img.addEventListener('load', function () {
-      if (!ratio) wrap.style.setProperty('--ratio', img.naturalWidth + ' / ' + img.naturalHeight);
+      img.classList.add('is-in');
+      var real = img.naturalWidth + ' / ' + img.naturalHeight;
+      if (image.ratio !== real) {
+        image.ratio = real;
+        wrap.style.setProperty('--ratio', real);
+        scheduleLayout();
+      }
       if (image.width) return;
       image.width = img.naturalWidth;
       image.height = img.naturalHeight;
@@ -1374,6 +1862,7 @@
   function refreshFrame(run, index) {
     var node = results.querySelector('[data-frame-for="' + run.id + ':' + index + '"]');
     if (node) node.replaceWith(renderFrame(run, index));
+    scheduleLayout();
   }
 
   // Nothing in the gallery shows a run's size or cost any more; if the viewer
@@ -1415,21 +1904,32 @@
   }
 
   // Drop images from the in-memory runs once the server has really deleted them.
+  // Takes images out of the page, and hands back what is needed to put them
+  // back exactly as they were.
   function forgetImages(ids) {
-    var gone = {};
+    var gone = {}, record = [];
     ids.forEach(function (id) { gone[id] = true; selected.delete(id); });
     runs.forEach(function (run) {
-      run.frames.forEach(function (f) {
-        if (f.image && gone[f.image.id]) { f.image = null; f.status = 'deleted'; }
+      run.frames.forEach(function (f, i) {
+        if (f.image && gone[f.image.id]) {
+          record.push({ run: run, index: i, image: f.image });
+          f.image = null;
+          f.status = 'deleted';
+        }
       });
     });
-    // A run with nothing left in it is not worth a row.
+    // A run with nothing left in it is not worth a place on the wall.
     runs = runs.filter(function (run) {
       return run.status === 'running' || run.frames.some(function (f) { return f.image || f.status === 'failed'; });
     });
     renderRuns();
+    return record;
   }
 
+  // Deleting is immediate and can be taken back for ten seconds. The server
+  // moves the file aside rather than destroying it, so Undo is a real undo —
+  // the same picture, the same place, its star intact.
+  var UNDO_MS = 10000;
   async function deleteImages(ids) {
     var real = ids.filter(Boolean);
     if (!real.length) return;
@@ -1446,11 +1946,46 @@
         return;
       }
       // Treat missing files as gone too — the goal was for them not to be there.
-      forgetImages((payload.deleted || []).concat(payload.missing || []));
+      var record = forgetImages((payload.deleted || []).concat(payload.missing || []));
       clearError();
+      var n = record.length;
+      if (!n) return;
+      toast('Deleted ' + n + (n === 1 ? ' picture' : ' pictures'), {
+        label: 'Undo', ms: UNDO_MS,
+        run: function () { undoDelete(record, payload.deleted || [], payload.wasFavourite || []); }
+      });
     } catch (err) {
       showError('Could not reach the studio server',
         'Nothing was deleted. Check the server is still running, then try again.', 'danger');
+    }
+  }
+
+  async function undoDelete(record, ids, favourites) {
+    try {
+      var res = await fetch('/api/images/restore', {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ ids: ids, favourites: favourites })
+      });
+      if (res.status === 401) { lockOut(); return; }
+      var back = {};
+      ((await res.json()).restored || []).forEach(function (id) { back[id] = true; });
+      var n = 0;
+      record.forEach(function (r) {
+        if (!back[r.image.id]) return;
+        r.run.frames[r.index].image = r.image;
+        r.run.frames[r.index].status = 'done';
+        if (runs.indexOf(r.run) === -1) runs.push(r.run);
+        n++;
+      });
+      runs.sort(function (x, y) { return y.startedAt - x.startedAt; });
+      renderRuns();
+      if (n < record.length) {
+        showError('Some pictures could not be brought back',
+          (record.length - n) + ' had already been cleared from the server. The rest are back where they were.', 'warning');
+      } else toast(n === 1 ? 'Picture restored' : n + ' pictures restored');
+    } catch (err) {
+      showError('Could not reach the studio server', 'The pictures were not restored. Try Undo again within a few minutes.', 'danger');
     }
   }
 
@@ -1480,8 +2015,7 @@
 
     var del = el('button', 'btn-text btn-text--danger', 'Delete');
     del.type = 'button';
-    armConfirm(del, function () { del.textContent = 'Delete'; },
-      'Delete ' + selected.size + ' permanently?', function () { deleteImages(Array.from(selected)); });
+    del.addEventListener('click', function () { deleteImages(Array.from(selected)); });
     actions.appendChild(del);
 
     var clear = el('button', 'btn-text', 'Clear selection');
@@ -1666,6 +2200,7 @@
     lightboxState = { run: run, list: list, index: pos };
     renderLightbox();
     lightbox.hidden = false;
+    fitViewer();
     lbClose.focus();
     document.addEventListener('keydown', lightboxKeys, true);
   }
@@ -1687,8 +2222,6 @@
 
   function renderLightbox() {
     if (!lightboxState) return;
-    // A "for good?" asked about one picture must never carry over to the next.
-    if (typeof disarmLbDelete === 'function') disarmLbDelete();
     var run = lightboxState.run;
     var image = lightboxState.list[lightboxState.index];
     if (!image) return;
@@ -1746,6 +2279,7 @@
     paintLbFav(image);
     var many = lightboxState.list.length > 1;
     lbPrev.hidden = lbNext.hidden = !many;
+    viewerShow(run, image);
   }
 
   function stepLightbox(step) {
@@ -1761,6 +2295,10 @@
     document.removeEventListener('keydown', lightboxKeys, true);
     var was = lightboxState;
     lightboxState = null;
+    viewing = null;
+    pointers = {};
+    gesture = null;
+    lbSide.classList.remove('is-open');
     // Focus returns to the picture that was open. The frame may have been
     // redrawn meanwhile (favouriting does that), so find it again by its place
     // in the run rather than trusting the old element.
@@ -1784,6 +2322,22 @@
 
   function lightboxKeys(e) {
     if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); return; }
+    // The divider is a slider: its arrows move it, not the run.
+    if (document.activeElement === lbDivider && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      setSplit(view.split + (e.key === 'ArrowRight' ? 2 : -2));
+      return;
+    }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      var k = e.key.toLowerCase();
+      if (k === '+' || k === '=') { e.preventDefault(); zoomBy(1.35); return; }
+      if (k === '-' || k === '_') { e.preventDefault(); zoomBy(1 / 1.35); return; }
+      if (k === '0') { e.preventDefault(); zoomTo(1); return; }
+      if (k === 'b' && !lbCompareBtn.hidden) { e.preventDefault(); setCompare(!view.compare); return; }
+      if (k === 'i') { e.preventDefault(); setWide(!lightbox.classList.contains('is-wide')); return; }
+      if (k === 'f' && !lbFav.hidden) { e.preventDefault(); lbFav.click(); return; }
+      if (k === 'd') { e.preventDefault(); lbDownload.click(); return; }
+    }
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); stepLightbox(e.key === 'ArrowRight' ? 1 : -1); return; }
     if (e.key === 'Tab') trapTab(e, lightbox);
   }
@@ -1791,8 +2345,247 @@
   lbClose.addEventListener('click', closeLightbox);
   lbPrev.addEventListener('click', function () { stepLightbox(-1); });
   lbNext.addEventListener('click', function () { stepLightbox(1); });
-  lightbox.addEventListener('mousedown', function (e) {
-    if (e.target === lightbox || e.target.classList.contains('lightbox__stage')) closeLightbox();
+  // A click on the empty stage closes — but only a click, never the end of a
+  // drag that began on the picture.
+  var stageDownOn = null;
+  lightbox.addEventListener('mousedown', function (e) { stageDownOn = e.target; });
+  lightbox.addEventListener('click', function (e) {
+    if (e.target !== stageDownOn) return;
+    if (e.target === lightbox || e.target === lbStage) closeLightbox();
+  });
+
+  // -------------------------------------------------------------------------
+  // The viewer's picture: fit, zoom, pan, compare, filmstrip
+  // -------------------------------------------------------------------------
+  var view = { s: 1, x: 0, y: 0, compare: false, split: 50 };
+  var MAX_ZOOM = 8;
+
+  // How much room the picture may take: the stage, less the bar above it and
+  // the filmstrip below. Set as CSS variables the image's max size reads.
+  function fitViewer() {
+    if (lightbox.hidden) return;
+    var strip = lbStrip.hidden ? 0 : 66;
+    lbStage.style.setProperty('--lb-w', Math.max(120, lbStage.clientWidth - (lbPrev.hidden ? 24 : 124)) + 'px');
+    lbStage.style.setProperty('--lb-h', Math.max(120, lbStage.clientHeight - 56 - strip) + 'px');
+  }
+  window.addEventListener('resize', fitViewer);
+
+  function paintView(settle) {
+    lbCanvas.classList.toggle('is-settling', Boolean(settle));
+    lbCanvas.classList.toggle('is-zoomed', view.s > 1.001);
+    lbCanvas.style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.s + ')';
+    lbZoomReset.textContent = Math.round(view.s * 100) + '%';
+    lbZoomOut.disabled = view.s <= 1.001;
+    lbZoomIn.disabled = view.s >= MAX_ZOOM - 0.001;
+  }
+
+  // Keep at least a good part of the picture on the stage.
+  function clampPan() {
+    var w = lbCanvas.offsetWidth * view.s, h = lbCanvas.offsetHeight * view.s;
+    var mx = Math.max(0, (w - lbStage.clientWidth) / 2 + 60), my = Math.max(0, (h - lbStage.clientHeight) / 2 + 60);
+    if (view.s <= 1.001) { view.x = 0; view.y = 0; return; }
+    view.x = Math.max(-mx, Math.min(mx, view.x));
+    view.y = Math.max(-my, Math.min(my, view.y));
+  }
+
+  // Zoom about a point on the stage (client coordinates), so what is under the
+  // pointer stays under the pointer.
+  function zoomTo(s, cx, cy, settle) {
+    s = Math.max(1, Math.min(MAX_ZOOM, s));
+    var r = lbStage.getBoundingClientRect();
+    var px = (cx == null ? r.left + r.width / 2 : cx) - (r.left + r.width / 2);
+    var py = (cy == null ? r.top + r.height / 2 : cy) - (r.top + r.height / 2);
+    var k = s / view.s;
+    view.x = px - (px - view.x) * k;
+    view.y = py - (py - view.y) * k;
+    view.s = s;
+    clampPan();
+    paintView(settle !== false);
+  }
+  function zoomBy(f, cx, cy, settle) { zoomTo(view.s * f, cx, cy, settle); }
+
+  lbZoomIn.addEventListener('click', function () { zoomBy(1.5); });
+  lbZoomOut.addEventListener('click', function () { zoomBy(1 / 1.5); });
+  lbZoomReset.addEventListener('click', function () { zoomTo(1); });
+  lbStage.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomBy(Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0022)), e.clientX, e.clientY, false);
+  }, { passive: false });
+  lbCanvas.addEventListener('dblclick', function (e) {
+    if (view.s > 1.001) zoomTo(1); else zoomTo(2.5, e.clientX, e.clientY);
+  });
+
+  // One pointer pans (or, unzoomed on a touch screen, swipes); two pinch.
+  var pointers = {}, gesture = null;
+  function points() { return Object.keys(pointers).map(function (id) { return pointers[id]; }); }
+  lbCanvas.addEventListener('pointerdown', function (e) {
+    if (e.target === lbDivider || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    try { lbCanvas.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
+    var p = points();
+    if (p.length === 2) {
+      gesture = { kind: 'pinch', d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y), s: view.s };
+    } else {
+      gesture = { kind: view.s > 1.001 ? 'pan' : 'swipe', sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, touch: e.pointerType !== 'mouse' };
+      if (gesture.kind === 'pan') lbCanvas.classList.add('is-panning');
+    }
+  });
+  lbCanvas.addEventListener('pointermove', function (e) {
+    if (!pointers[e.pointerId] || !gesture) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var p = points();
+    if (gesture.kind === 'pinch' && p.length === 2) {
+      var d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      zoomTo(gesture.s * d / gesture.d, (p[0].x + p[1].x) / 2, (p[0].y + p[1].y) / 2, false);
+    } else if (gesture.kind === 'pan') {
+      view.x = gesture.ox + (e.clientX - gesture.sx);
+      view.y = gesture.oy + (e.clientY - gesture.sy);
+      clampPan();
+      paintView(false);
+    } else if (gesture.kind === 'swipe' && gesture.touch) {
+      // Follow the finger a little, so the swipe feels like it has hold of something.
+      view.x = (e.clientX - gesture.sx) * 0.6;
+      view.y = Math.max(0, e.clientY - gesture.sy) * 0.6;
+      paintView(false);
+    }
+  });
+  function endPointer(e) {
+    if (!pointers[e.pointerId]) return;
+    delete pointers[e.pointerId];
+    lbCanvas.classList.remove('is-panning');
+    var g = gesture;
+    if (points().length) { gesture = null; return; }
+    gesture = null;
+    if (!g || g.kind !== 'swipe' || !g.touch) return;
+    var dx = e.clientX - g.sx, dy = e.clientY - g.sy;
+    view.x = 0; view.y = 0;
+    paintView(true);
+    if (dy > 110 && Math.abs(dy) > Math.abs(dx)) closeLightbox();
+    else if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) && lightboxState && lightboxState.list.length > 1) stepLightbox(dx < 0 ? 1 : -1);
+  }
+  lbCanvas.addEventListener('pointerup', endPointer);
+  lbCanvas.addEventListener('pointercancel', endPointer);
+
+  // Before and after. The photo an edit was made from is laid over the result
+  // and clipped at the divider.
+  function baseFor(run, image) {
+    var photos = sourceUrls(run);
+    if (!photos.length) return null;
+    return run.plan === 'each' && photos.length > 1 ? (photos[(image.frame || 1) - 1] || null) : photos[0];
+  }
+
+  function setSplit(pct) {
+    view.split = Math.max(0, Math.min(100, pct));
+    lbCompare.style.clipPath = 'inset(0 ' + (100 - view.split) + '% 0 0)';
+    lbDivider.style.left = view.split + '%';
+    lbDivider.setAttribute('aria-valuenow', String(Math.round(view.split)));
+  }
+
+  function setCompare(on) {
+    view.compare = Boolean(on) && !lbCompareBtn.hidden;
+    lbCompareBtn.setAttribute('aria-pressed', String(view.compare));
+    lbCompare.hidden = lbDivider.hidden = lbTagBefore.hidden = lbTagAfter.hidden = !view.compare;
+    if (view.compare) setSplit(50);
+  }
+  lbCompareBtn.addEventListener('click', function () { setCompare(!view.compare); if (view.compare) lbDivider.focus(); });
+
+  var dividing = false;
+  lbDivider.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    dividing = true;
+    lbDivider.focus();
+    try { lbDivider.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
+  });
+  lbDivider.addEventListener('pointermove', function (e) {
+    if (!dividing) return;
+    var r = lbCanvas.getBoundingClientRect();
+    setSplit((e.clientX - r.left) / r.width * 100);
+  });
+  ['pointerup', 'pointercancel'].forEach(function (t) { lbDivider.addEventListener(t, function () { dividing = false; }); });
+
+  function setWide(on) {
+    lightbox.classList.toggle('is-wide', on);
+    lbWide.setAttribute('aria-pressed', String(on));
+    lbWide.setAttribute('aria-label', on ? 'Show the details card' : 'Hide the details card');
+    fitViewer();
+  }
+  lbWide.addEventListener('click', function () { setWide(!lightbox.classList.contains('is-wide')); });
+
+  lbSheet.addEventListener('click', function () {
+    var open = !lbSide.classList.contains('is-open');
+    lbSide.classList.toggle('is-open', open);
+    lbSheet.setAttribute('aria-expanded', String(open));
+    lbSheet.setAttribute('aria-label', open ? 'Hide details' : 'Show details');
+    fitViewer();
+  });
+
+  function paintStrip() {
+    var list = lightboxState.list;
+    lbStrip.hidden = list.length < 2;
+    lbStrip.innerHTML = '';
+    if (lbStrip.hidden) return;
+    list.forEach(function (im, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Frame ' + (im.frame || i + 1));
+      b.setAttribute('aria-current', String(i === lightboxState.index));
+      var t = document.createElement('img');
+      t.src = im.src;
+      t.alt = '';
+      b.appendChild(t);
+      b.addEventListener('click', function () { lightboxState.index = i; renderLightbox(); });
+      lbStrip.appendChild(b);
+    });
+    var cur = lbStrip.querySelector('[aria-current="true"]');
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+
+  // Called whenever the viewer shows a picture. A new picture starts fitted
+  // and uncompared; the same picture redrawn (after favouriting, say) keeps
+  // whatever zoom it had.
+  var viewing = null;
+  function viewerShow(run, image) {
+    var base = baseFor(run, image);
+    lbCompareBtn.hidden = lbCompareRule.hidden = !base;
+    if (base && lbBase.getAttribute('src') !== base) lbBase.src = base;
+    paintStrip();
+    if (viewing !== image) {
+      viewing = image;
+      view.s = 1; view.x = 0; view.y = 0;
+      setCompare(false);
+    } else {
+      setCompare(view.compare);
+    }
+    fitViewer();
+    paintView(false);
+  }
+
+  lbCopy.addEventListener('click', function () {
+    var text = lbPrompt.textContent;
+    var done = function () { toast('Prompt copied'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { toast('This browser would not allow copying'); });
+    else toast('This browser cannot copy from here');
+  });
+
+  // Pictures can only be put on the clipboard as PNG, so a JPEG is redrawn.
+  lbCopyImage.addEventListener('click', async function () {
+    if (!lightboxState) return;
+    if (!navigator.clipboard || !window.ClipboardItem) { toast('This browser cannot copy pictures'); return; }
+    try {
+      var blob = await (await fetch(lightboxState.list[lightboxState.index].src)).blob();
+      if (blob.type !== 'image/png') {
+        var bmp = await createImageBitmap(blob);
+        var cv = document.createElement('canvas');
+        cv.width = bmp.width; cv.height = bmp.height;
+        cv.getContext('2d').drawImage(bmp, 0, 0);
+        blob = await new Promise(function (ok) { cv.toBlob(ok, 'image/png'); });
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('Picture copied — paste it anywhere');
+    } catch (err) {
+      toast('The picture could not be copied');
+    }
   });
   lbDownload.addEventListener('click', function () {
     if (lightboxState) downloadImage(lightboxState.run, lightboxState.list[lightboxState.index]);
@@ -1808,17 +2601,14 @@
     var run = lightboxState.run, image = lightboxState.list[lightboxState.index];
     if (!(await toggleFavourite(image, !image.favourite))) return;
     paintLbFav(image);
+    toast(image.favourite ? 'Added to your library' : 'Removed from your library');
     // The star on the frame behind, and the library wall, follow.
     if (state.filter === 'fav') renderRuns();
     else run.frames.forEach(function (f, i) { if (f.image === image) refreshFrame(run, i); });
   });
-  function lbDeleteIdle() {
-    lbDelete.textContent = '';
-    lbDelete.appendChild(icon('trash', 16));
-    lbDelete.title = 'Delete';
-  }
-  lbDeleteIdle();
-  var disarmLbDelete = armConfirm(lbDelete, lbDeleteIdle, 'Delete for good?', function () {
+  lbDelete.appendChild(icon('trash', 16));
+  lbDelete.title = 'Delete — you can undo for a few seconds';
+  lbDelete.addEventListener('click', function () {
     if (!lightboxState) return;
     var image = lightboxState.list[lightboxState.index];
     closeLightbox();
@@ -1852,7 +2642,7 @@
   function setBusy(on, label) {
     busy = on;
     promptEl.disabled = on;
-    [modelEl, qualityEl, shapeEl, sizeEl].forEach(function (s) { s.disabled = on; });
+    if (on) { closeMenu(false); closeHistory(); }
     actionBtn.disabled = on;
     actionBtn.classList.toggle('is-busy', on);
     cancelBtn.hidden = !on;
@@ -1860,6 +2650,27 @@
     // Re-render the chips and pills so their controls follow the busy state —
     // pulling a photo out from under a run in flight would strand it.
     renderRail();
+  }
+
+  // Progress in the browser tab, so a run can be watched from another one.
+  function paintTitle(run) {
+    document.title = run && run.status === 'running'
+      ? '(' + doneImages(run).length + '/' + run.frames.length + ') ' + studioName
+      : studioName;
+  }
+
+  function notifyFinished(run) {
+    if (!notifyEl.checked || !document.hidden || !window.Notification || Notification.permission !== 'granted') return;
+    var got = doneImages(run).length;
+    try {
+      var n = new Notification(studioName, {
+        body: run.cancelled ? 'Run cancelled.' : got === run.frames.length
+          ? (got === 1 ? 'Your picture is ready.' : 'All ' + got + ' pictures are ready.')
+          : got + ' of ' + run.frames.length + ' pictures arrived.',
+        tag: 'imagine-run'
+      });
+      n.onclick = function () { window.focus(); n.close(); };
+    } catch (err) { /* some browsers only allow this from a service worker */ }
   }
 
   function setBusyLabel(label) {
@@ -1970,6 +2781,7 @@
     refreshFrame(run, index);
     refreshRunCaption(run);
     if (busy) setBusyLabel(busyLabelFor(run));
+    paintTitle(run);
   }
 
   function cancelRun(run) {
@@ -1982,6 +2794,8 @@
   async function submitRun(settings) {
     if (busy) return;
     if (Date.now() < rateLimitUntil) return;
+    rememberPrompt(settings.prompt);
+    prompts = null;   // the library has a new entry, or a new use: read it afresh
 
     // Editing each of several photos is one request per photo; everything else
     // — generation, one photo, photos combined — is one per frame asked for.
@@ -2013,6 +2827,7 @@
 
     activeRun = run;
     setBusy(true, busyLabelFor(run));
+    paintTitle(run);
 
     var next = 0;
     async function worker() {
@@ -2050,6 +2865,8 @@
       activeRun = null;
       // Restore the button in a finally, so a failure never leaves it stuck.
       setBusy(false);
+      paintTitle(null);
+      notifyFinished(run);
       refreshBalance();
       if (runTimer && !runs.some(function (r) { return r.status === 'running'; })) {
         clearInterval(runTimer);
@@ -2436,22 +3253,89 @@
     renderAction();
   });
 
-  modelEl.addEventListener('change', function () {
-    // Their own choice supersedes the explanation of the forced one.
-    retiredFallback = null;
-    state.model = modelEl.value;
-    buildModelOptions();
-    renderRail();
+  promptEl.addEventListener('scroll', function () { promptBack.scrollTop = promptEl.scrollTop; });
+
+  // The composer opens the moment it is touched and rests again once left
+  // empty. focusout fires before the new focus lands, hence the short wait.
+  dock.addEventListener('focusin', renderIdle);
+  dock.addEventListener('focusout', function () { setTimeout(renderIdle, 60); });
+  rail.addEventListener('click', function (e) {
+    if (rail.classList.contains('is-idle') && e.target !== addBtn && !addBtn.contains(e.target)) promptEl.focus();
   });
-  qualityEl.addEventListener('change', function () { state.quality = qualityEl.value; renderRail(); });
-  shapeEl.addEventListener('change', function () {
-    if (mode() === 'edit') state.editShape = shapeEl.value; else state.shape = shapeEl.value;
-    renderRail();
+
+  // -------------------------------------------------------------------------
+  // Recent prompts. The up arrow in an empty prompt brings back what was asked
+  // for before — the last twenty, kept in this browser.
+  // -------------------------------------------------------------------------
+  var historyAt = -1;
+  function rememberPrompt(text) {
+    var t = String(text || '').trim();
+    if (!t) return;
+    var list = (readStore(PROMPTS_KEY) || []).filter(function (p) { return p !== t; });
+    list.unshift(t);
+    writeStore(PROMPTS_KEY, list.slice(0, 20));
+  }
+
+  function closeHistory() {
+    historyAt = -1;
+    historyMenu.hidden = true;
+    historyMenu.innerHTML = '';
+  }
+
+  function paintHistory() {
+    var list = readStore(PROMPTS_KEY) || [];
+    historyMenu.innerHTML = '';
+    if (!list.length) { closeHistory(); return; }
+    historyMenu.hidden = false;
+    historyMenu.appendChild(el('div', 'pillmenu__title', 'Recent prompts'));
+    list.slice(0, 8).forEach(function (text, n) {
+      var row = el('button', 'mention', text);
+      row.type = 'button';
+      row.tabIndex = -1;
+      row.title = text;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(n === historyAt));
+      row.addEventListener('mousedown', function (e) { e.preventDefault(); pickHistory(n); });
+      historyMenu.appendChild(row);
+    });
+  }
+
+  function pickHistory(n) {
+    var list = readStore(PROMPTS_KEY) || [];
+    if (!list[n]) return;
+    promptEl.value = list[n];
+    closeHistory();
+    autosize();
+    renderAction();
+    promptEl.focus();
+    promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
+  }
+
+  promptEl.addEventListener('keydown', function (e) {
+    if (mention) return;
+    var open = !historyMenu.hidden;
+    var max = Math.min(8, (readStore(PROMPTS_KEY) || []).length);
+    if (e.key === 'ArrowUp' && (open || !promptEl.value)) {
+      if (!max) return;
+      e.preventDefault();
+      historyAt = open ? (historyAt <= 0 ? max - 1 : historyAt - 1) : 0;
+      paintHistory();
+    } else if (open && e.key === 'ArrowDown') {
+      e.preventDefault();
+      historyAt = (historyAt + 1) % max;
+      paintHistory();
+    } else if (open && (e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      pickHistory(Math.max(0, historyAt));
+    } else if (open && e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeHistory();
+    } else if (open && e.key.length === 1) {
+      closeHistory();
+    }
   });
-  sizeEl.addEventListener('change', function () {
-    if (mode() === 'edit') state.editResolution = sizeEl.value; else state.resolution = sizeEl.value;
-    renderRail();
-  });
+  promptEl.addEventListener('blur', function () { setTimeout(closeHistory, 120); });
 
   function setCount(n) {
     n = Math.min(maxCount(), Math.max(1, n));
@@ -2492,7 +3376,11 @@
   // Top bar: filters, name, appearance
   // -------------------------------------------------------------------------
   function setFilter(f) {
-    state.filter = f === 'fav' || f === 'mine' ? f : 'all';
+    state.filter = f === 'fav' || f === 'mine' || f === 'assets' ? f : 'all';
+    // Prompts has its own address, so it can be bookmarked and sent to someone.
+    var want = state.filter === 'assets' ? '/asset' : '/';
+    if (location.pathname !== want) { try { history.replaceState(null, '', want); } catch (err) { /* file:// */ } }
+    if (state.filter === 'assets' && prompts !== null) loadPrompts();   // fresh each visit
     Array.prototype.slice.call(filtersEl.querySelectorAll('.seg__btn')).forEach(function (b) {
       var on = b.dataset.filter === state.filter;
       b.setAttribute('aria-checked', String(on));
@@ -2519,6 +3407,12 @@
   }
   wireRadioKeys(filtersEl, 'filter', setFilter);
 
+  thumbEl.addEventListener('input', function () {
+    state.thumb = Math.min(5, Math.max(1, Number(thumbEl.value) || 3));
+    applyThumb();
+    persist();
+  });
+
   function setTheme(t) {
     var theme = t === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
@@ -2530,6 +3424,151 @@
     });
   }
   wireRadioKeys(themeEl, 'themeChoice', setTheme);
+
+  // -------------------------------------------------------------------------
+  // What's new. /whats-new.json lists each update, newest first. A few seconds
+  // after signing in, anyone who has not seen the latest is shown it — once.
+  // -------------------------------------------------------------------------
+  var news = [];
+
+  function paintNews(entries) {
+    newsBody.innerHTML = '';
+    entries.forEach(function (rel, n) {
+      if (n > 0) newsBody.appendChild(el('div', 'news__earlier num', 'Earlier — ' + rel.title + (rel.date ? ', ' + rel.date : '')));
+      (rel.items || []).forEach(function (it) {
+        var row = el('div', 'news__item');
+        row.appendChild(el('span', 'news__dot'));
+        row.appendChild(el('b', null, it.title));
+        row.appendChild(el('p', null, it.body));
+        newsBody.appendChild(row);
+      });
+    });
+    newsTitle.textContent = entries[0].title || 'What’s new';
+    newsDate.textContent = 'What’s new' + (entries[0].date ? ' · ' + entries[0].date : '');
+  }
+
+  function openNews(entries) {
+    if (!entries.length || !newsDialog.hidden) return;
+    closeWho(false);
+    paintNews(entries);
+    lastFocused = document.activeElement;
+    newsDialog.hidden = false;
+    newsBody.scrollTop = 0;
+    newsOk.focus();
+  }
+
+  function closeNews() {
+    if (newsDialog.hidden) return;
+    newsDialog.hidden = true;
+    if (news.length) writeStore(NEWS_KEY, news[0].id);
+    if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+  }
+
+  async function checkNews() {
+    try {
+      var res = await fetch('/whats-new.json', { cache: 'no-cache' });
+      if (!res.ok) return;
+      var list = await res.json();
+      news = Array.isArray(list) ? list.filter(function (r) { return r && r.id && Array.isArray(r.items); }) : [];
+    } catch (err) { return; }
+    if (!news.length) return;
+    var seen = readStore(NEWS_KEY);
+    if (seen === news[0].id) return;
+    // Everything since the one they last saw; for a first visit, just the latest.
+    var at = news.findIndex(function (r) { return r.id === seen; });
+    var unseen = at === -1 ? news.slice(0, 1) : news.slice(0, at);
+    // A few seconds in, once the page has settled — and never on top of
+    // something else that is open, or while a run is going.
+    setTimeout(function wait() {
+      if (app.hidden) return;
+      if (busy || !lightbox.hidden || !consentDialog.hidden || !keysDialog.hidden) { setTimeout(wait, 4000); return; }
+      openNews(unseen);
+    }, 2500);
+  }
+
+  newsOk.addEventListener('click', closeNews);
+  newsClose.addEventListener('click', closeNews);
+  newsDialog.addEventListener('mousedown', function (e) { if (e.target === newsDialog) closeNews(); });
+  newsOpen.addEventListener('click', function () { if (news.length) openNews(news); else toast('Nothing new to show yet'); });
+  document.addEventListener('keydown', function (e) {
+    if (newsDialog.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeNews(); }
+    else if (e.key === 'Tab') trapTab(e, newsDialog);
+  }, true);
+
+  function setAccent(name) {
+    var ok = ['coral', 'amber', 'green', 'blue', 'violet'];
+    var accent = ok.indexOf(name) === -1 ? 'coral' : name;
+    if (accent === 'coral') document.documentElement.removeAttribute('data-accent');
+    else document.documentElement.setAttribute('data-accent', accent);
+    writeStore(ACCENT_KEY, accent);
+    Array.prototype.slice.call(accentEl.querySelectorAll('.swatch')).forEach(function (b) {
+      var on = b.dataset.accentChoice === accent;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+  Array.prototype.slice.call(accentEl.querySelectorAll('.swatch')).forEach(function (b) {
+    b.addEventListener('click', function () { setAccent(b.dataset.accentChoice); });
+  });
+  accentEl.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    var btns = Array.prototype.slice.call(accentEl.querySelectorAll('.swatch'));
+    var at = btns.findIndex(function (b) { return b.getAttribute('aria-checked') === 'true'; });
+    var next = btns[(at + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length];
+    setAccent(next.dataset.accentChoice);
+    next.focus();
+  });
+
+  // Off unless asked for. The browser's own permission prompt appears the
+  // first time it is switched on; a refusal switches it back off and says so.
+  notifyEl.addEventListener('change', async function () {
+    if (!notifyEl.checked) { writeStore(NOTIFY_KEY, false); return; }
+    if (!window.Notification) {
+      notifyEl.checked = false;
+      toast('This browser has no desktop notifications');
+      return;
+    }
+    var perm = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+    if (perm !== 'granted') {
+      notifyEl.checked = false;
+      toast('Notifications are blocked for this site in the browser');
+    }
+    writeStore(NOTIFY_KEY, notifyEl.checked);
+  });
+
+  // The list of shortcuts. ? opens it; / goes to the prompt. Neither fires
+  // while something is being typed.
+  function typing() {
+    var n = document.activeElement;
+    return Boolean(n) && (n.tagName === 'TEXTAREA' || n.tagName === 'SELECT' || (n.tagName === 'INPUT' && n.type !== 'checkbox' && n.type !== 'range') || n.isContentEditable);
+  }
+  function openKeys() {
+    if (!keysDialog.hidden) return;
+    closeWho(false);
+    lastFocused = document.activeElement;
+    keysDialog.hidden = false;
+    keysClose.focus();
+  }
+  function closeKeys() {
+    if (keysDialog.hidden) return;
+    keysDialog.hidden = true;
+    if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+  }
+  keysOpen.addEventListener('click', openKeys);
+  keysClose.addEventListener('click', closeKeys);
+  keysDialog.addEventListener('mousedown', function (e) { if (e.target === keysDialog) closeKeys(); });
+  document.addEventListener('keydown', function (e) {
+    if (!keysDialog.hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeKeys(); }
+      else if (e.key === 'Tab') trapTab(e, keysDialog);
+      return;
+    }
+    if (app.hidden || typing() || e.ctrlKey || e.metaKey || e.altKey || !consentDialog.hidden || !newsDialog.hidden) return;
+    if (e.key === '?') { e.preventDefault(); openKeys(); }
+    else if (e.key === '/' && lightbox.hidden) { e.preventDefault(); promptEl.focus(); }
+  }, true);
 
   function renderAvatar() {
     whoBtn.innerHTML = '';
@@ -2649,6 +3688,7 @@
     promptEl.focus();
     loadSavedRuns();
     refreshBalance();
+    checkNews();
     // The server knows when its disk is replaced on every deploy. Say so here,
     // where the people whose work it is will see it, not only in a deploy log.
     if (config.storageEphemeral) {
@@ -2662,19 +3702,20 @@
   // rest of the app cannot tell the difference.
   async function loadSavedRuns() {
     if (!config || !config.savesImages) return;
+    historyLoading = true;
+    renderRuns();
     try {
-      var res = await fetch('/api/runs?limit=40', { headers: authHeaders({}) });
+      var res = await fetch('/api/runs?limit=' + PAGE, { headers: authHeaders({}) });
       if (!res.ok) return;
-      var payload = await res.json();
-      var restored = (payload.runs || []).map(restoreRun);
-      if (!restored.length) return;
+      var list = (await res.json()).runs || [];
+      historyDone = list.length < PAGE;
       // Anything made in this tab stays on top of what was restored.
-      var have = {};
-      runs.forEach(function (r) { have[r.id] = true; });
-      runs = runs.concat(restored.filter(function (r) { return !have[r.id]; }));
-      renderRuns();
+      takeRestored(list);
     } catch (err) {
       // The gallery simply stays empty; nothing here is worth an error.
+    } finally {
+      historyLoading = false;
+      renderRuns();
     }
   }
 
@@ -2745,6 +3786,17 @@
     state.variants = Math.min(MAX_EDIT_VARIANTS, Math.max(1, Number(saved.variants) || 1));
     state.name = saved.name || '';
     state.filter = saved.filter === 'fav' || saved.filter === 'mine' ? saved.filter : 'all';
+    if (/^\/assets?\/?$/.test(location.pathname)) state.filter = 'assets';
+    state.thumb = Math.min(5, Math.max(1, Number(saved.thumb) || 3));
+    applyThumb();
+
+    // What this studio is called, everywhere it is named.
+    studioName = (config.studioName || 'Imagine studio');
+    $('brand-name').textContent = studioName;
+    $('gate-title').textContent = studioName;
+    document.title = studioName;
+    setAccent(readStore(ACCENT_KEY));
+    notifyEl.checked = readStore(NOTIFY_KEY) === true && window.Notification && Notification.permission === 'granted';
 
     userName.value = state.name;
     renderAvatar();

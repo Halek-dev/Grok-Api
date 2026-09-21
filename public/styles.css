@@ -83,6 +83,14 @@
   --shadow:     0 12px 40px rgba(23, 51, 44, 0.16);
 }
 
+/* Accent. One colour, used for the one filled button and the few marks that
+   echo it. Each is given for both themes: lighter on dark, and with a dark
+   enough ink on top to read. */
+:root[data-accent='amber']  { --action: #E2B463; --action-hover: #EBC27A; --action-active: #D4A552; --on-action: #3A2A08; }
+:root[data-accent='green']  { --action: #7FCBA6; --action-hover: #93D6B5; --action-active: #6DBB95; --on-action: #0C2E1F; }
+:root[data-accent='blue']   { --action: #86B6EE; --action-hover: #9BC4F2; --action-active: #74A6E0; --on-action: #0B2545; }
+:root[data-accent='violet'] { --action: #B7A7EE; --action-hover: #C6B9F3; --action-active: #A797E2; --on-action: #231A4D; }
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -212,7 +220,8 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .pulse, .frame__placeholder.is-running { animation: none; }
+  .pulse, .frame__placeholder.is-running, .frame--skeleton, .ring { animation: none; }
+  .frame__button img { opacity: 1; transform: none; }
   * { transition: none !important; }
 }
 
@@ -342,6 +351,20 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .topbar__left b { color: var(--text); font-weight: 600; }
 .topbar__left.is-low b { color: var(--warning); }
 
+.sizer { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.sizer input[type='range'] {
+  -webkit-appearance: none; appearance: none;
+  width: 84px; height: 16px; margin: 0; background: transparent; cursor: pointer;
+}
+.sizer input::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--border-strong); }
+.sizer input::-moz-range-track { height: 3px; border-radius: 2px; background: var(--border-strong); }
+.sizer input::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 13px; height: 13px; margin-top: -5px;
+  border-radius: 50%; background: var(--structure); border: 0;
+}
+.sizer input::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--structure); border: 0; }
+.sizer input:focus-visible { box-shadow: 0 0 0 2px var(--page), 0 0 0 4px var(--structure); border-radius: 8px; }
+
 .who { position: relative; }
 .avatar {
   width: 32px; height: 32px;
@@ -367,6 +390,22 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 }
 .popover--who { right: 0; top: 42px; width: 270px; }
 .popover__note { font-size: 12px; color: var(--muted); margin: 8px 0 16px; }
+.label--gap { margin-top: 16px; }
+.swatches { display: flex; gap: 10px; }
+.swatch {
+  width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 50%;
+  background: var(--sw);
+  cursor: pointer;
+  box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px transparent;
+  transition: box-shadow var(--t);
+}
+.swatch:hover { box-shadow: 0 0 0 2px var(--raised), 0 0 0 3px var(--border-strong); }
+.swatch[aria-checked='true'] { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--text); }
+.swatch:focus-visible { box-shadow: 0 0 0 2px var(--raised), 0 0 0 4px var(--structure); }
+.switchrow { display: flex; gap: 10px; align-items: flex-start; margin: 18px 0 14px; font-size: 13px; cursor: pointer; }
+.switchrow input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--action); flex: 0 0 auto; cursor: pointer; }
+.switchrow small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 
 /* ==========================================================================
    Gallery
@@ -406,18 +445,27 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 }
 .day:first-child { margin-top: 0; }
 
-/* The gallery is pictures and nothing else: no captions, no buttons. A run is
-   a group of frames with air around it; everything about it is in the viewer. */
-.run { margin-bottom: 30px; }
-.run__grid {
+/* The gallery is one continuous wall of pictures under each date. Nothing is
+   grouped by run any more — there are no captions to group — so every frame
+   flows across the full width, packed masonry-style: each keeps its own shape,
+   none is cropped or letterboxed to fit a row. The columns are a grid with
+   4px rows; app.js gives each frame the row span its height needs, which keeps
+   reading order left-to-right (CSS columns would run top-to-bottom). */
+.wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--thumb, 300px), 1fr));
+  grid-auto-rows: 4px;
+  column-gap: 12px;
+  align-items: start;
+  margin-bottom: 14px;
 }
-/* The library is one continuous wall of favourites, not rows of runs. */
+.wall .frame { margin-bottom: 12px; }
+
 .library__head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
 .library__title { font-size: 18px; font-weight: 600; margin: 0; }
 .library__note { font-size: 12.5px; color: var(--muted); }
+
+.more { text-align: center; font-size: 12.5px; color: var(--muted); padding: 10px 0 0; min-height: 30px; }
 
 .btn-text {
   font: 500 12.5px/1.4 var(--font);
@@ -444,10 +492,12 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   background: var(--surface);
   border: 1px solid var(--border);
   aspect-ratio: var(--ratio, 1 / 1);
-  max-height: 720px;
-  transition: border-color var(--t), transform var(--t);
+  transition: border-color var(--t), transform var(--t), box-shadow var(--t);
 }
-.frame:has(.frame__button:hover) { border-color: var(--hairline); transform: translateY(-2px); }
+.frame:has(.frame__button:hover) { border-color: var(--structure); transform: translateY(-2px); }
+/* Point at a picture and the others from the same run show themselves, so
+   which frames belong together is still there when you want it. */
+.frame.is-kin { border-color: var(--hairline); box-shadow: 0 0 0 1px var(--hairline); }
 .frame__button {
   display: block;
   width: 100%; height: 100%;
@@ -460,7 +510,12 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   display: block;
   width: 100%; height: 100%;
   object-fit: cover;
+  /* A picture arrives rather than pops. */
+  opacity: 0;
+  transform: scale(0.985);
+  transition: opacity 360ms ease-out, transform 360ms ease-out;
 }
+.frame__button img.is-in { opacity: 1; transform: none; }
 
 .frame__select, .frame__fav {
   position: absolute;
@@ -509,7 +564,17 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   font-size: 12px;
   color: var(--muted);
 }
-.frame__placeholder.is-running { animation: pulse 1.6s ease-in-out infinite; color: var(--text); }
+/* The frame being worked on: a slow sweep of light and a turning ring. */
+.frame__placeholder.is-running, .frame--skeleton {
+  color: var(--text);
+  background: linear-gradient(100deg, transparent 30%, var(--wash) 50%, transparent 70%) 0 0 / 250% 100% no-repeat, var(--surface);
+  animation: sweep 1.8s linear infinite;
+}
+@keyframes sweep { from { background-position: 130% 0, 0 0; } to { background-position: -130% 0, 0 0; } }
+.ring { width: 30px; height: 30px; animation: turn 1s linear infinite; }
+.ring circle { fill: none; stroke: var(--border-strong); stroke-width: 3; }
+.ring path { fill: none; stroke: var(--action); stroke-width: 3; stroke-linecap: round; }
+@keyframes turn { to { transform: rotate(360deg); } }
 .frame--failed { border-color: var(--danger-hairline); background: linear-gradient(var(--danger-wash), var(--danger-wash)), var(--surface); }
 .frame__failed b { color: var(--danger); font-weight: 600; }
 .frame__failed .btn-quiet { height: 30px; padding: 0 14px; }
@@ -564,7 +629,30 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   box-shadow: var(--shadow);
   transition: border-color var(--t);
 }
+.composer { position: relative; }
 .composer:focus-within { border-color: var(--hairline); }
+
+/* Resting. With nothing typed, nothing attached and the focus elsewhere, the
+   composer folds down to a slim bar so the gallery has the screen. A click or
+   a keystroke opens it again. */
+.dock__inner { transition: max-width 200ms ease-out; }
+.dock.is-idle .dock__inner { max-width: 560px; }
+.composer.is-idle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 8px;
+  border-radius: var(--r-pill);
+  cursor: text;
+}
+.composer.is-idle .composer__bar,
+.composer.is-idle .composer__hint { display: none; }
+.composer.is-idle .composer__top { flex: 0 0 auto; }
+.composer.is-idle .chip-add { width: 32px; height: 32px; border-radius: 50%; }
+.composer.is-idle .prompt-wrap { flex: 1 1 auto; min-width: 0; }
+.composer.is-idle .composer__prompt { height: 32px !important; min-height: 0; margin: 0; padding: 5px 4px; overflow: hidden; white-space: nowrap; }
+.composer__summary { display: none; }
+.composer.is-idle .composer__summary { display: block; flex: 0 0 auto; padding: 0 10px 0 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .composer.is-over { border-color: var(--structure); background: linear-gradient(var(--wash), var(--wash)), var(--surface); }
 
 .composer__top {
@@ -649,6 +737,30 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 }
 .chip:hover .chip__remove, .chip:focus-within .chip__remove { opacity: 1; }
 @media (hover: none) { .chip__remove { opacity: 1; } }
+/* A larger look at a photo, when the pointer rests on its chip. */
+.chip__preview {
+  position: absolute;
+  z-index: 6;
+  left: 0; bottom: calc(100% + 12px);
+  width: 200px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: 12px; line-height: 1.4;
+  opacity: 0; visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 140ms ease-out, transform 140ms ease-out, visibility 0s linear 140ms;
+  pointer-events: none;
+}
+.chip__preview img { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; background: var(--sunken); margin-bottom: 6px; }
+.chip__preview b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip__preview span { color: var(--muted); }
+.chip:hover .chip__preview { opacity: 1; visibility: visible; transform: none; transition-delay: 380ms, 380ms, 380ms; }
+.chips.is-busy .chip__preview, .chip.is-dragging .chip__preview, .chip:has([aria-expanded='true']) .chip__preview { display: none; }
+@media (hover: none) { .chip__preview { display: none; } }
+
 .chip__remove:hover { background: var(--danger); border-color: var(--danger); color: #1a0806; }
 
 .chip-add {
@@ -667,12 +779,34 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 /* With photos attached it matches their height and reads as the next slot. */
 .composer.has-photos .chip-add { width: 52px; height: 52px; border-radius: var(--r-sm); }
 
+/* The prompt and, behind it, its highlighted copy. They must wrap identically:
+   same font, size, line height, padding and width, or the tags drift. */
+.prompt-wrap { position: relative; margin: 8px 0 6px; }
+.prompt-back {
+  position: absolute; inset: 0;
+  padding: 6px 4px;
+  font-size: 15px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: break-word;
+  color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+.prompt-back mark {
+  color: transparent;
+  border-radius: 5px;
+  background: var(--wash);
+  box-shadow: 0 0 0 1px var(--hairline), 0 0 0 2px transparent;
+}
+/* "photo 4" with three photos attached: the model will have nothing to look at. */
+.prompt-back mark.is-missing { background: var(--warning-wash); box-shadow: 0 0 0 1px var(--warning-hairline); }
+
 .composer__prompt {
+  position: relative;
   display: block;
   width: 100%;
   min-height: 44px;
   max-height: 200px;
-  margin: 8px 0 6px;
+  margin: 0;
   padding: 6px 4px;
   border: 0;
   background: transparent;
@@ -721,30 +855,56 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .pill:hover { border-color: var(--border-strong); background: var(--raised); }
 .pill:focus-within { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--structure); }
 .pill svg { color: var(--muted); flex: 0 0 auto; }
-.pill__select {
+.pill:disabled { opacity: 0.55; cursor: not-allowed; }
+.pill[aria-expanded='true'] { border-color: var(--structure); background: var(--raised); }
+.pill--stepper.is-disabled { opacity: 0.55; }
+
+/* The menu a pill opens, sitting just above it. */
+.pillmenu {
   position: absolute;
-  inset: 0;
-  width: 100%; height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  font-size: 14px;
-  border: 0;
-  background: transparent;
-  -webkit-appearance: none;
-  appearance: none;
-}
-/* The list a native select opens is drawn by the browser, not by this page. It
-   inherited the pill's light text onto its own white ground in the dark theme,
-   which made every option but the highlighted one invisible. Say both colours
-   outright, in both themes. */
-.pill__select option, .pill__select optgroup {
+  z-index: 5;
+  min-width: 240px;
+  max-width: min(360px, calc(100% - 16px));
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
   background: var(--raised);
-  color: var(--text);
-  font-weight: 400;
+  box-shadow: var(--shadow);
 }
-.pill__select option:disabled { color: var(--muted); }
-.pill__select:disabled { cursor: not-allowed; }
-.pill:has(.pill__select:disabled), .pill--stepper.is-disabled { opacity: 0.55; }
+.pillmenu__title { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 4px 8px 6px; }
+.pillmenu__row {
+  display: flex; align-items: baseline; gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0; border-radius: 7px;
+  background: transparent;
+  font-size: 13px; text-align: left;
+  cursor: pointer;
+}
+.pillmenu__row:hover, .pillmenu__row:focus-visible { background: var(--wash); box-shadow: none; }
+.pillmenu__row[aria-selected='true'] { background: var(--structure); color: var(--on-structure); }
+.pillmenu__row[aria-selected='true'] .pillmenu__note, .pillmenu__row[aria-selected='true'] .pillmenu__price { color: inherit; opacity: 0.8; }
+.pillmenu__row:disabled { opacity: 0.45; cursor: not-allowed; }
+.pillmenu__main { flex: 1 1 auto; min-width: 0; }
+.pillmenu__label { display: block; font-weight: 500; }
+.pillmenu__note { display: block; font-size: 12px; color: var(--muted); }
+.pillmenu__note.is-warning { color: var(--warning); }
+.pillmenu__price { flex: 0 0 auto; font-size: 12.5px; color: var(--muted); }
+
+/* Shapes are a grid of little frames drawn to each ratio. */
+.pillmenu__grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.pillmenu__tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px;
+  height: 62px; padding: 6px 2px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  font-size: 11.5px; color: var(--muted);
+  cursor: pointer;
+}
+.pillmenu__tile:hover, .pillmenu__tile:focus-visible { background: var(--wash); color: var(--text); box-shadow: none; }
+.pillmenu__tile[aria-selected='true'] { background: var(--structure); color: var(--on-structure); }
+.pillmenu__tile .ratio { border-color: currentColor; }
+
 .pill.is-warning { border-color: var(--warning-hairline); color: var(--warning); }
 
 /* The little rectangle drawn to the chosen ratio. */
@@ -813,6 +973,8 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .panel__note { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
 
 .panel--menu { padding: 5px; max-width: 320px; }
+.panel--history { max-width: none; }
+.panel--history .mention { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mention {
   display: flex;
   align-items: center;
@@ -901,17 +1063,64 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 58px;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  touch-action: none;
 }
-.lightbox__stage img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+.lb-canvas {
+  position: relative;
+  flex: 0 0 auto;
+  line-height: 0;
+  transform-origin: center center;
+  will-change: transform;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lb-canvas.is-zoomed { cursor: grab; }
+.lb-canvas.is-panning { cursor: grabbing; }
+.lb-canvas.is-settling { transition: transform 220ms ease-out; }
+.lb-canvas > img {
+  display: block;
+  /* Fitted to the stage by app.js, which knows how much room the card, the
+     bar and the filmstrip leave. */
+  max-width: var(--lb-w, 60vw);
+  max-height: var(--lb-h, 80vh);
   border-radius: var(--r-md);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
+.lb-compare { position: absolute; inset: 0; overflow: hidden; border-radius: var(--r-md); clip-path: inset(0 50% 0 0); }
+.lb-compare img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.lb-divider {
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 28px; margin-left: -14px;
+  padding: 0; border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.lb-divider::before { content: ''; position: absolute; top: 0; bottom: 0; left: 13px; width: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
+.lb-divider::after {
+  content: ''; position: absolute; top: 50%; left: 2px;
+  width: 24px; height: 24px; margin-top: -12px;
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.lb-divider:focus-visible { box-shadow: none; }
+.lb-divider:focus-visible::after { box-shadow: 0 0 0 3px var(--action); }
+.lb-tag {
+  position: absolute; top: 10px;
+  padding: 2px 9px; border-radius: var(--r-pill);
+  background: var(--scrim); color: #fff;
+  font-size: 11.5px; font-weight: 600; line-height: 1.5;
+  pointer-events: none;
+}
+.lb-tag--before { left: 10px; }
+.lb-tag--after { right: 10px; }
+
 .lb-nav {
   position: absolute;
+  z-index: 2;
   top: 50%;
   transform: translateY(-50%);
   width: 42px; height: 42px;
@@ -926,8 +1135,68 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   transition: background var(--t), border-color var(--t);
 }
 .lb-nav:hover { border-color: var(--structure); }
-.lb-nav--prev { left: 4px; }
-.lb-nav--next { right: 4px; }
+.lb-nav--prev { left: 8px; }
+.lb-nav--next { right: 8px; }
+
+/* Zoom, compare, and hiding the card: one small glass bar, top left. */
+.lb-bar {
+  position: absolute;
+  z-index: 2;
+  top: 8px; left: 8px;
+  display: flex; align-items: center; gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-pill);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+.lb-bar__btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 28px; padding: 0 7px;
+  border: 0; border-radius: var(--r-pill);
+  background: transparent; color: var(--text);
+  font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t);
+}
+.lb-bar__btn:hover { background: var(--wash); }
+.lb-bar__btn--text { padding: 0 10px; }
+.lb-bar__btn[aria-pressed='true'] { background: var(--structure); color: var(--on-structure); }
+.lb-bar__rule { width: 1px; height: 16px; background: var(--glass-line); margin: 0 3px; }
+
+/* The run, as a strip: one click to any variant. */
+.lb-strip {
+  position: absolute;
+  z-index: 2;
+  left: 50%; bottom: 8px;
+  transform: translateX(-50%);
+  display: flex; gap: 5px;
+  max-width: calc(100% - 24px);
+  overflow-x: auto;
+  padding: 5px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  scrollbar-width: none;
+}
+.lb-strip::-webkit-scrollbar { display: none; }
+.lb-strip button {
+  flex: 0 0 auto;
+  width: 44px; height: 44px; padding: 0;
+  border: 1.5px solid transparent; border-radius: 7px;
+  overflow: hidden; background: var(--sunken);
+  cursor: pointer; opacity: 0.6;
+  transition: opacity var(--t), border-color var(--t);
+}
+.lb-strip button:hover { opacity: 1; }
+.lb-strip button[aria-current='true'] { opacity: 1; border-color: var(--action); }
+.lb-strip img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* With the card hidden the picture has the whole window. */
+.lightbox.is-wide .lightbox__side { display: none; }
 
 /* The card: everything about the picture, and everything you can do with it. */
 .lightbox__side {
@@ -982,6 +1251,8 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 
 .lightbox__labelrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 6px; }
 .lightbox__labelrow .lightbox__label { margin: 0; }
+.lightbox__labelacts { display: inline-flex; gap: 14px; }
+.lb-sheet { display: none; }
 
 .lightbox__tools { flex: 0 0 auto; padding-top: 16px; margin-top: 8px; border-top: 1px solid var(--glass-line); }
 .lightbox__links { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 22px; margin-top: 14px; }
@@ -1022,6 +1293,76 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .dialog__title { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
 .dialog__body { font-size: 13.5px; line-height: 1.55; color: var(--muted); margin: 0 0 22px; }
 .dialog__actions { display: flex; justify-content: flex-end; gap: 10px; }
+.popover__links { display: flex; justify-content: space-between; gap: 12px; }
+
+/* What's new */
+.dialog--news { max-width: 520px; max-height: calc(100vh - 40px); display: flex; flex-direction: column; animation: news-in 260ms ease-out; }
+@keyframes news-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+.news__kicker { font-size: 12px; color: var(--action); font-weight: 600; margin-bottom: 2px; }
+.news { overflow-y: auto; margin: 10px -6px 18px 0; padding-right: 6px; display: flex; flex-direction: column; gap: 14px; }
+.news__item { display: grid; grid-template-columns: 22px 1fr; gap: 0 10px; }
+.news__dot { width: 8px; height: 8px; margin: 7px 0 0 4px; border-radius: 50%; background: var(--action); }
+.news__item b { font-size: 14px; font-weight: 600; }
+.news__item p { grid-column: 2; margin: 2px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.news__earlier { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* ==========================================================================
+   Prompts — /asset. Every prompt the team has used, a card each.
+   ========================================================================== */
+.assets__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; }
+.assets__title { font-size: 18px; font-weight: 600; margin: 0; }
+.assets__note { font-size: 12.5px; color: var(--muted); }
+.assets__tools { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.assets__search { width: 220px; height: 34px; border-radius: var(--r-pill); padding: 0 14px; font-size: 13px; }
+.assets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.pcard {
+  display: flex; flex-direction: column;
+  min-height: 150px;
+  padding: 14px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color var(--t);
+}
+.pcard:hover, .pcard:focus-within { border-color: var(--border-strong); }
+.pcard.is-fav { border-color: var(--hairline); }
+.pcard__text {
+  flex: 1 1 auto;
+  margin: 0 0 12px;
+  font-size: 14px; line-height: 1.55;
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
+}
+.pcard.is-open .pcard__text { display: block; }
+.pcard__more { align-self: flex-start; margin: -6px 0 10px; }
+.pcard__meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.pcard__acts { display: flex; align-items: center; gap: 2px; margin: 0 -6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.pcard__use { margin-right: auto; height: 30px; padding: 0 12px; font-size: 12.5px; border-color: transparent; color: var(--structure); }
+.pcard__acts .icon-btn--star[aria-pressed='true'] { color: var(--action); }
+@media (max-width: 760px) {
+  .assets { grid-template-columns: 1fr; }
+  .assets__tools { margin-left: 0; width: 100%; }
+  .assets__search { flex: 1; width: auto; }
+}
+
+.dialog--keys { max-width: 460px; max-height: calc(100vh - 40px); overflow-y: auto; }
+.dialog__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dialog__head .dialog__title { margin: 0; }
+.keys { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; font-size: 13px; }
+.keys__group { flex: 0 0 100%; margin-top: 12px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.keys span { flex: 1 1 56%; color: var(--text); }
+.keys kbd {
+  min-width: 26px; padding: 2px 7px;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 6px;
+  background: var(--sunken);
+  font: 500 12px/1.5 var(--font); text-align: center;
+}
+/* Each shortcut is a row: keys, then what they do, then a break. */
+.keys span::after { content: ''; display: block; }
 
 /* ==========================================================================
    Narrow screens
@@ -1034,7 +1375,9 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   .topbar__spend { gap: 6px; font-size: 12px; }
   .seg__btn { padding: 5px 10px; }
   .stage { padding: 14px 12px calc(var(--dock-h) + 28px); }
-  .run__grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .wall { grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb, 300px), 44vw), 1fr)); column-gap: 8px; }
+  .wall .frame { margin-bottom: 8px; }
+  .sizer { display: none; }
   .dock { padding: 0 8px 8px; }
   .composer { border-radius: 16px; }
   .composer__bar { flex-direction: column; align-items: stretch; }
@@ -1051,16 +1394,55 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   .composer__prompt { max-height: 132px; }
   .pill__step { width: 32px; }
 
-  .lightbox { flex-direction: column; padding: 10px; gap: 10px; }
-  .lightbox__stage { padding: 0 6px; min-height: 0; flex: 1 1 46%; }
-  .lb-nav { width: 36px; height: 36px; }
-  .lb-nav--prev { left: 0; }
-  .lb-nav--next { right: 0; }
-  .lightbox__side { flex: 0 1 54%; padding: 14px; }
+  .lightbox { flex-direction: column; padding: 0; gap: 0; }
+  .lightbox__stage { border-radius: 0; flex: 1 1 auto; min-height: 0; }
+  .lb-nav { display: none; }            /* swipe instead */
+  .lb-bar { top: 10px; left: 10px; }
+  #lb-wide, #lb-wide + .lb-bar__rule, .lb-bar__rule:last-of-type { display: none; }
+  .lb-strip { bottom: 10px; }
+  /* The card is a sheet: closed, it shows its title bar; pulled up, the rest. */
+  .lightbox__side {
+    flex: 0 0 auto;
+    max-height: 66vh;
+    border-radius: 18px 18px 0 0;
+    border-width: 1px 0 0;
+    padding: 0 16px 14px;
+  }
+  .lb-sheet {
+    display: block; width: 100%; height: 22px; padding: 0; border: 0; background: transparent; cursor: pointer;
+  }
+  .lb-sheet span { display: block; width: 38px; height: 4px; margin: 9px auto 0; border-radius: 2px; background: var(--border-strong); }
+  .lightbox__side:not(.is-open) .lightbox__scroll,
+  .lightbox__side:not(.is-open) .lightbox__links { display: none; }
+  .lightbox__side:not(.is-open) .lightbox__tools { border-top: 0; margin-top: 0; padding-top: 4px; }
+  .lightbox__side:not(.is-open) .lightbox__head { margin-bottom: 8px; }
+  .lightbox.is-wide .lightbox__side { display: flex; }
 }
-  .lb-nav { width: 36px; height: 36px; }
-  .lb-nav--prev { left: 6px; }
-  .lb-nav--next { right: 6px; }
-  .lightbox__side { flex: 0 1 45%; border-left: 0; border-top: 1px solid var(--border); }
-  .lightbox__tools { margin-top: 16px; }
+
+/* ==========================================================================
+   Toasts — small confirmations only, bottom left, gone in a moment. An error
+   is never a toast: errors stay put above the composer until dealt with.
+   ========================================================================== */
+.toasts {
+  position: fixed;
+  z-index: 120;
+  left: 18px; bottom: 18px;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
 }
+.toast {
+  display: flex; align-items: center; gap: 14px;
+  max-width: min(360px, calc(100vw - 36px));
+  padding: 9px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  pointer-events: auto;
+  animation: toast-in 180ms ease-out;
+}
+.toast.is-leaving { opacity: 0; transform: translateY(6px); transition: opacity 200ms, transform 200ms; }
+.toast .btn-text { font-size: 13px; font-weight: 600; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+@media (max-width: 760px) { .toasts { left: 10px; right: 10px; bottom: auto; top: calc(var(--topbar-h) + 8px); } }

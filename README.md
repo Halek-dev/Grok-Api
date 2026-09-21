@@ -129,15 +129,48 @@ type or attach lives there.
 - **Referring to a photo.** Type `@` in the prompt and pick one. It inserts the
   plain words "photo 2", which is what the model reads.
 - **Settings are pills** under the prompt: model, shape, size, quality, and a
-  stepper for frames (variants on an edit). The estimated cost sits by the
-  button. Ctrl + Enter submits.
-- **Results.** The gallery is pictures and nothing else, large. Click one to
-  open the viewer: the page blurs behind it and a card on the right holds
-  everything — the prompt, the photos it was made from, model, size, cost, when
-  and by whom — and every action: download, download all, *use as reference*
-  (sends it into the composer as a photo), run again, reuse, add to the
-  library, delete. On the gallery itself only a star and a tick box appear on
-  hover, for favouriting and for selecting several to download or delete.
+  stepper for frames (variants on an edit). Each opens a small menu above it
+  with the price on every row; shape is a grid of little frames drawn to each
+  ratio. The estimated cost sits by the button. Ctrl + Enter submits.
+- **Tags in the prompt.** With photos attached, "photo 2" in the prompt gets a
+  tinted ground so a reference reads as a tag. Name a photo that is not there —
+  "photo 5" with three attached — and the tag turns amber.
+- **Recent prompts.** Press the up arrow in an empty prompt for the last few,
+  kept in this browser.
+- **It rests.** With nothing typed or attached and the focus elsewhere, the
+  composer folds to a slim bar so the gallery has the screen. Click it, or
+  press `/`, and it opens.
+- **The gallery** is one wall of pictures under each date, packed so that tall
+  and wide frames sit together uncropped. The slider in the top bar sets how
+  large they are drawn. Point at a picture and the others from the same run
+  outline themselves. Older history loads as you scroll.
+- **The viewer.** Click a picture: the page blurs behind it and a card on the
+  right holds the prompt, the photos it was made from, model, size, cost, when
+  and by whom — and every action. Scroll or pinch to zoom, drag to move,
+  double-click to zoom in and out. For an edit, *Before / after* lays the
+  original over the result with a divider to drag. A filmstrip along the bottom
+  jumps between the pictures of the run. Hide the card for the whole window. On
+  a phone, swipe sideways between pictures, swipe down to close, and pull the
+  sheet up for the details.
+- **Deleting can be undone** for ten seconds. The server moves the file aside
+  rather than destroying it, so Undo brings back the same picture, in the same
+  place, with its star. After ten minutes it is gone for good.
+- **Small confirmations** — added to library, prompt copied, picture restored —
+  appear briefly at the bottom left. Errors never do: they stay above the
+  composer until dealt with.
+- **Yours alone**, from the round button at the top right: your *Working as*
+  name, dark or light, an accent colour, a desktop notification when a run
+  finishes in a background tab (off unless you switch it on), and the list of
+  keyboard shortcuts, which `?` also opens. While a run is going the browser
+  tab shows its progress, "(2/4)".
+- **Prompts — `/asset`.** Every prompt anyone uses is saved on the server for the
+  whole team, a card each, at its own address so it can be bookmarked. *Use
+  this prompt* puts it in the box; the icons copy it, star it (favourites come
+  first and are never cleared) and delete it, with an Undo. Search by words or
+  by person. It is filled from your existing history the first time it opens.
+- **What's new.** A few seconds after signing in, anyone who has not yet seen
+  the latest update is shown a short card describing it — once. It can be
+  reopened from the round button at the top right.
 - **History keeps the photos.** The photos attached to an edit are saved with
   it and shown on its card in the viewer. *Reuse photos and prompt* puts
   them back in the composer, in their original order; *Run this again* repeats
@@ -181,8 +214,9 @@ A few things worth knowing:
   other model is a 400, so the control only appears when 2.0 is selected.
 - **On 2.0, "Auto" is not one price.** It bills *low* for generation and *medium*
   for editing. The estimate reflects that.
-- **Edits are priced at the 1k rate plus one input charge.** The edits endpoint
-  takes no resolution parameter, so the output size is not something you choose.
+- **An edit costs the output price at the size you choose, plus an input charge
+  for every photo sent.** Three photos combined at 2K is one output and three
+  inputs. What is actually charged comes from xAI's own figure on each response.
 - **Sizes are shown in pixels, not as `1k`/`2k`.** They come from a table measured
   against the live API — see below.
 
@@ -510,6 +544,24 @@ tail -n 10 usage.jsonl
 
 ---
 
+### Telling the team what changed
+
+`public/whats-new.json` is a list of updates, newest first. Each has an `id`, a
+`date`, a `title` and a few `items` (a short `title` and a sentence of `body`).
+When the first entry's `id` is one a person's browser has not seen, the card is
+shown to them after sign-in, along with any others they missed. **Add an entry
+at the top with every change people will notice** — a new `id` is what makes the
+card appear. Nothing else needs touching.
+
+### The prompt library
+
+Prompts are kept in `DATA_DIR/prompts.json`: the full text (the usage log keeps
+only the first 300 characters), who used it last, how often, and when. The same
+words used again count as another use of one entry, and the several frames of
+one run count once. Past 500 entries the least recently used go first, never a
+favourite. The file is in `.gitignore`. Like everything else it needs
+`DATA_DIR` to be on a mounted volume to survive a deploy.
+
 ### Showing what is left of the credit
 
 *Spent today* is this app's own count. What is actually left on the xAI account
@@ -599,6 +651,7 @@ the shape, size or quality they chose; the line says what xAI objected to.
 | `DATA_DIR` | an attached Railway volume if there is one, else the project folder | Where saved images, favourites and `usage.jsonl` live. Must be on a mounted volume on any host that replaces its disk on deploy. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
+| `STUDIO_NAME` | `Imagine studio` | What the studio calls itself in the top bar, on the password screen and in the browser tab. |
 | `XAI_MANAGEMENT_KEY` | *(none)* | Optional. An xAI **management** key. When set, the top bar shows the prepaid credit that is left. Read-only billing calls; never sent to the browser. |
 | `XAI_TEAM_ID` | looked up from the API key | Only needed if that lookup fails. |
 | `VISION_MODEL` | `grok-4.20-non-reasoning` | Chat model behind `/api/describe`, which reads photographs and answers in text. Must accept image input. |

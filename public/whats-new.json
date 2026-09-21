@@ -1,0 +1,17 @@
+[
+  {
+    "id": "2026-09-21",
+    "date": "21 September 2026",
+    "title": "A new studio",
+    "items": [
+      { "title": "One place to type and attach", "body": "The side panel is gone. Everything lives in the box at the bottom: your prompt, your photos as small chips, and the settings as pills with the price on every option." },
+      { "title": "Combine photos by number", "body": "Attach two or more photos and the first is the Base. Type @ to say which photo to take from — “the head from photo 2”. Drag the chips to change the order, click one to crop it." },
+      { "title": "A wall of pictures", "body": "The gallery is pictures only, packed together at their own shapes. Use the slider at the top to make them bigger or smaller. Older work loads as you scroll." },
+      { "title": "Click a picture for everything", "body": "The viewer shows the prompt, the photos it was made from, the cost, and every action. Scroll to zoom, drag to move, and press Before / after to compare an edit with the original." },
+      { "title": "Nothing needs attaching twice", "body": "The photos behind every edit are kept. Run again repeats it; Reuse photos and prompt puts it all back in the box to change." },
+      { "title": "Library and prompts", "body": "Star a picture to keep it in the Library for good. Every prompt you use is saved under Prompts, ready to copy or use again." },
+      { "title": "Delete has an undo", "body": "Deleting is instant, and for ten seconds you can take it back." },
+      { "title": "Make it yours", "body": "The round button at the top right holds your name, dark or light, an accent colour, and the keyboard shortcuts — or press ? any time." }
+    ]
+  }
+]
