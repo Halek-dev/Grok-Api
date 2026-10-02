@@ -573,14 +573,20 @@ key. It is optional:
 3. Restart. The top bar now reads `Spent today $2.40 · $41.27 left`.
 
 The server makes two read-only billing calls, caches the answer for a minute,
-and never sends the key to the browser. The figure is the prepaid ledger less
-what has been used in the current billing cycle, because xAI only posts spend
-to the ledger when a cycle closes. **Compare it once against the console's
-Billing page** after setting it up. A `≈` before the amount means this cycle's
-spend could not be read, so the real figure may be lower. Under $5 it turns
-amber. If the key is missing, wrong, or xAI is not answering, the amount is
-simply not shown — nothing about generating depends on it — and the reason is
-printed once in the deploy log as `[balance]`.
+and never sends the key to the browser. What is left is read from
+`coreInvoice.prepaidCredits` in xAI's invoice preview, which is the figure the
+console shows as *Credits remaining*; hovering the amount also shows how much
+was bought in all and how much has been used. Under $5 it turns amber. If the
+key is missing, wrong, or xAI is not answering, the amount is simply not shown
+— nothing about generating depends on it — and the reason is printed once in
+the deploy log as `[balance]`.
+
+> The first version read the prepaid ledger's `total` instead, as the
+> documentation suggests, and showed $75.00 against a real $51.70: on a live
+> account that total held only the purchases, with a month of spend never
+> posted to it. The formula is now pinned by a test built from the real
+> responses. If the two ever disagree again, the console is right — check
+> `lib/balance.js` against a fresh response before trusting either.
 
 ### The photos attached to edits are kept
 

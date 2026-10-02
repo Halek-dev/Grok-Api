@@ -348,14 +348,12 @@
       balanceEl.hidden = false;
       balanceEl.innerHTML = '';
       balanceEl.appendChild(document.createTextNode('· '));
-      // A tilde when this billing cycle's spend could not be read: the true
-      // figure may be lower.
-      balanceEl.appendChild(el('b', null, (b.exact ? '' : '≈') + money(b.remaining)));
+      balanceEl.appendChild(el('b', null, money(b.remaining)));
       balanceEl.appendChild(document.createTextNode(' left'));
       balanceEl.classList.toggle('is-low', b.remaining < LOW_BALANCE);
-      balanceEl.title = 'Prepaid credit left on the xAI account' +
-        (b.cycleSpend != null ? ' — ' + money(b.ledger) + ' on the ledger, less ' + money(b.cycleSpend) + ' used this billing cycle.' : '.') +
-        (b.exact ? '' : ' This cycle’s spend could not be read, so the real figure may be lower.') +
+      // The same figure the xAI console calls "Credits remaining".
+      balanceEl.title = 'Prepaid credit left on the xAI account — the console’s “Credits remaining”.' +
+        (b.purchased != null ? ' ' + money(b.purchased) + ' bought in all, ' + money(b.used) + ' used.' : '') +
         ' Refreshed about once a minute.';
     } catch (err) {
       balanceEl.hidden = true;

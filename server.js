@@ -798,7 +798,8 @@ async function readRuns(limit, favouritesOnly, before) {
 // ---------------------------------------------------------------------------
 // GET /api/balance — what is left of the prepaid credit
 //
-// Two read-only calls to xAI's Management API, cached for a minute so a busy
+// Two read-only calls to xAI's Management API (the invoice preview for what is
+// left, the prepaid ledger for what was bought), cached for a minute so a busy
 // page does not hammer it. Always answers 200: no key, a refused key or an
 // outage each come back as available:false with a reason, because a missing
 // balance must never stop anyone working.
@@ -829,13 +830,14 @@ async function readBalance() {
     }
     if (!teamIdCache) throw new Error('could not learn the team id; set XAI_TEAM_ID');
     const base = XAI_MANAGEMENT_BASE + '/v1/billing/teams/' + encodeURIComponent(teamIdCache);
-    const ledger = await getJson(base + '/prepaid/balance', XAI_MANAGEMENT_KEY);
-    // The preview is what makes the figure live. If it fails the ledger alone
-    // is still worth showing, flagged as possibly generous.
-    let preview = null;
-    try { preview = await getJson(base + '/postpaid/invoice/preview', XAI_MANAGEMENT_KEY); } catch { /* inexact */ }
-    const figures = remainingFrom(ledger, preview);
-    if (!figures) throw new Error('the balance response had no readable total');
+    // What is left is in the invoice preview, and only there: without it no
+    // balance is shown. The ledger says what was bought, which is context
+    // worth having and never a substitute. See lib/balance.js for why.
+    const preview = await getJson(base + '/postpaid/invoice/preview', XAI_MANAGEMENT_KEY);
+    let ledger = null;
+    try { ledger = await getJson(base + '/prepaid/balance', XAI_MANAGEMENT_KEY); } catch { /* context only */ }
+    const figures = remainingFrom(preview, ledger);
+    if (!figures) throw new Error('the invoice preview had no readable prepaidCredits');
     value = Object.assign({ available: true, checkedAt: new Date().toISOString() }, figures);
     lastBalanceProblem = '';
   } catch (err) {
