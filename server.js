@@ -52,6 +52,7 @@ const { createThrottle } = require('./lib/throttle.js');
 const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.js');
 const { remainingFrom } = require('./lib/balance.js');
 const promptLib = require('./lib/prompts.js');
+const projectLib = require('./lib/projects.js');
 
 // A refused or failed upstream request, written to stderr — on Railway, the
 // deploy log. The usage log records only successes and xAI's console does not
@@ -375,9 +376,12 @@ async function readPrompts() {
 // — so it is tried a few times, and as a last resort written in place: a save
 // that might be torn beats a save that is silently lost.
 async function writePrompts(list) {
-  const file = PROMPTS_FILE();
+  return writeJsonFile(PROMPTS_FILE(), list);
+}
+
+async function writeJsonFile(file, data) {
   const tmp = file + '.tmp';
-  const body = JSON.stringify(list);
+  const body = JSON.stringify(data);
   await fsp.writeFile(tmp, body, 'utf8');
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -410,6 +414,85 @@ function changePrompts(change) {
   });
   promptQueue = job.catch(function (err) { console.error('[prompts] could not save: ' + err.message); });
   return job;
+}
+
+// ---------------------------------------------------------------------------
+// Projects — DATA_DIR/projects.json. Same one-queue, write-whole-file shape as
+// the prompt library. See lib/projects.js for what is in it.
+// ---------------------------------------------------------------------------
+const PROJECTS_FILE = () => path.join(DATA_DIR, 'projects.json');
+let projectQueue = Promise.resolve();
+
+async function readProjects() {
+  try {
+    return projectLib.normalise(JSON.parse(await fsp.readFile(PROJECTS_FILE(), 'utf8')));
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') console.error('[projects] could not read: ' + err.message);
+    return projectLib.empty();
+  }
+}
+
+function listProjectsStore() {
+  const job = projectQueue.then(readProjects);
+  projectQueue = job.catch(function () {});
+  return job;
+}
+
+// change(store) returns { store, changed, ... }. Resolves to that result.
+function changeProjects(change) {
+  const job = projectQueue.then(async function () {
+    const out = change(await readProjects());
+    if (out.changed) await writeJsonFile(PROJECTS_FILE(), out.store);
+    return out;
+  });
+  projectQueue = job.catch(function (err) { console.error('[projects] could not save: ' + err.message); });
+  return job;
+}
+
+// Which view a request asks for: null for everything, 'unsorted', or a
+// project id. Anything else reads as everything.
+function projectView(params) {
+  const want = params.get('project');
+  if (!want) return null;
+  if (want === projectLib.UNSORTED) return projectLib.UNSORTED;
+  return projectLib.validProjectId(want) ? want : null;
+}
+
+// Projects with what the page shows beside each: how many pictures, how many
+// favourites, what was spent, and the newest picture as a cover. Read from
+// the usage log in one pass.
+async function describeProjects() {
+  const store = await listProjectsStore();
+  const favourites = await readFavourites();
+  const stats = {};
+  const stat = (id) => (stats[id] = stats[id] || { images: 0, favourites: 0, spent: 0, cover: null, coverAt: '' });
+  let raw = '';
+  try { raw = await fsp.readFile(USAGE_LOG, 'utf8'); } catch { /* no runs yet */ }
+  for (const line of raw.split('\n')) {
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (!r || !Array.isArray(r.files)) continue;
+    // Spend stays with the project a run was made in; moving a picture does
+    // not move money.
+    const made = r.project && projectLib.find(store, r.project) ? r.project : projectLib.UNSORTED;
+    stat(made).spent += typeof r.cost === 'number' ? r.cost : 0;
+    for (const f of r.files) {
+      if (!f || !validImageId(f.id)) continue;
+      const at = projectLib.placeOf(store, f.id, r.project) || projectLib.UNSORTED;
+      const st = stat(at);
+      st.images += 1;
+      if (favourites.has(f.id)) st.favourites += 1;
+      if (String(r.timestamp) > st.coverAt) { st.cover = f.id; st.coverAt = String(r.timestamp); }
+    }
+  }
+  const shape = (id) => {
+    const st = stats[id] || stat(id);
+    return { images: st.images, favourites: st.favourites, spent: Math.round(st.spent * 100) / 100, cover: st.cover };
+  };
+  return {
+    projects: store.projects.map((p) => Object.assign({}, p, shape(p.id))),
+    unsorted: shape(projectLib.UNSORTED)
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +614,9 @@ async function pruneSources() {
   if (!SAVE_IMAGES || !MAX_STORED_IMAGES) return;
   let names;
   try { names = await fsp.readdir(SOURCE_DIR); } catch { return; }
+  // A photo a project keeps as a reference stays, whatever its age.
+  const kept = projectLib.allReferences(await listProjectsStore());
+  names = names.filter((n) => !kept.has(n));
   if (names.length <= MAX_STORED_IMAGES) return;
   const stats = [];
   for (const name of names) {
@@ -698,8 +784,9 @@ async function serveSavedImage(res, id, dir) {
 
 // Rebuild recent runs from the log so the results survive a refresh. Lines from
 // one press of the button share a runId and are folded back into one run.
-async function readRuns(limit, favouritesOnly, before) {
+async function readRuns(limit, favouritesOnly, before, view) {
   const favourites = await readFavourites();
+  const store = await listProjectsStore();
   let raw;
   try {
     raw = await fsp.readFile(USAGE_LOG, 'utf8');
@@ -732,6 +819,7 @@ async function readRuns(limit, favouritesOnly, before) {
         sources: typeof r.sources === 'number' ? r.sources : null,
         reference: Boolean(r.reference),
         prompt: r.prompt,
+        project: r.project && projectLib.find(store, r.project) ? r.project : null,
         cost: 0,
         images: [],
         sourceLines: []
@@ -743,7 +831,11 @@ async function readRuns(limit, favouritesOnly, before) {
     if (r.timestamp > run.timestamp) run.timestamp = r.timestamp;
     for (const f of r.files) {
       if (f && validImageId(f.id)) {
-        run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id) });
+        // A picture can be moved out of the project its run was made in, so
+        // the view is applied per picture, not per run.
+        const at = projectLib.placeOf(store, f.id, r.project);
+        if (!projectLib.inView(view, at)) continue;
+        run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id), project: at });
       }
     }
     if (Array.isArray(r.sourceFiles)) {
@@ -1116,6 +1208,11 @@ async function handleImages(req, res, body) {
   // so frames arrive as they finish, which means several log lines share a run —
   // this is what groups them back together when reading usage.jsonl.
   const runId = typeof input.runId === 'string' ? input.runId.trim().slice(0, 40) : null;
+  // The project this run is made in. Only a project that exists counts; an
+  // unknown id is simply "no project", never an error — the picture must be
+  // made whatever the bookkeeping says.
+  let project = projectLib.validProjectId(input.project) ? input.project : null;
+  if (project && !projectLib.find(await listProjectsStore(), project)) project = null;
 
   // What every log line about this request says about it.
   const about = {
@@ -1239,7 +1336,7 @@ async function handleImages(req, res, body) {
   // are paid for and must be delivered whatever happens to a bookkeeping file.
   if (SAVE_IMAGES && STORAGE_READY) {
     changePrompts(function (list) {
-      return promptLib.recordUse(list, { text: prompt, mode: mode, user: user || null, runId: runId });
+      return promptLib.recordUse(list, { text: prompt, mode: mode, user: user || null, runId: runId, project: project });
     }).catch(function () { /* logged in the queue */ });
   }
 
@@ -1256,6 +1353,7 @@ async function handleImages(req, res, body) {
     sources: built.sources,
     reference: built.reference,
     sourceFiles: sourceFiles,
+    project: project,
     images: images.length,
     cost: cost,
     costEstimated: billed.estimated,
@@ -1298,7 +1396,7 @@ async function serveStatic(req, res, urlPath) {
     return fail(res, 400, 'Malformed path.');
   }
   // /asset is a view inside the app, not a file on disk: serve the same shell.
-  const rel = decoded === '/' || /^\/assets?\/?$/.test(decoded) ? '/index.html' : decoded;
+  const rel = decoded === '/' || /^\/assets?\/?$/.test(decoded) || /^\/p\/[a-z0-9-]*\/?$/.test(decoded) ? '/index.html' : decoded;
 
   // Resolve first, then confirm the result is still inside public/. Scanning the
   // raw string for ".." is not enough — encodings and absolute paths get past it.
@@ -1484,21 +1582,77 @@ const server = http.createServer(async function (req, res) {
         let limit = 20;
         let favouritesOnly = false;
         let before = null;
+        let view = null;
         try {
           const params = new URL(req.url, 'http://localhost').searchParams;
           favouritesOnly = params.get('favourites') === '1';
+          view = projectView(params);
           const b = params.get('before');
           if (b && !Number.isNaN(Date.parse(b))) before = new Date(Date.parse(b)).toISOString();
           const q = params.get('limit');
           if (q) limit = Math.min(favouritesOnly ? 500 : 100, Math.max(1, parseInt(q, 10) || 20));
         } catch { /* keep the default */ }
-        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly, before), saving: true });
+        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly, before, view), saving: true });
       }
 
       // The prompt library: list, favourite, delete, and put back.
       if (urlPath === '/api/prompts') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/prompts.');
-        return sendJson(res, 200, { prompts: promptLib.sorted(await listPrompts()) });
+        let view = null;
+        try { view = projectView(new URL(req.url, 'http://localhost').searchParams); } catch { /* all */ }
+        let prompts = promptLib.sorted(await listPrompts());
+        if (view === projectLib.UNSORTED) prompts = prompts.filter((p) => !(p.projects || []).length);
+        else if (view) prompts = prompts.filter((p) => (p.projects || []).indexOf(view) !== -1);
+        return sendJson(res, 200, { prompts: prompts });
+      }
+
+      // Projects: list, make, rename, archive, set defaults, delete, move
+      // pictures, and keep reference photos.
+      if (urlPath === '/api/projects') {
+        if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/projects.');
+        return sendJson(res, 200, await describeProjects());
+      }
+      if (urlPath.startsWith('/api/projects/')) {
+        if (req.method !== 'POST') return fail(res, 405, 'Use POST for ' + urlPath + '.');
+        let body;
+        try {
+          body = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
+        } catch (err) {
+          if (err && err.code === 'BODY_TOO_LARGE') return tooLarge(req, res);
+          return fail(res, 400, 'The request body was not valid JSON.');
+        }
+        const action = urlPath.slice('/api/projects/'.length);
+        // Every action but create names a project; move names a destination
+        // instead, which may be Unsorted.
+        if (action === 'move') {
+          if (body.to !== projectLib.UNSORTED && !projectLib.validProjectId(body.to)) return fail(res, 400, 'Not a valid destination.');
+          if (!Array.isArray(body.ids) || !body.ids.length) return fail(res, 400, 'Send an ids array naming the pictures to move.');
+        } else if (action !== 'create' && !projectLib.validProjectId(body.id)) {
+          return fail(res, 400, 'Not a valid project id.');
+        }
+        // A reference photo arrives as a data URI and is kept like any other
+        // source photo; a source already on disk can be kept by id.
+        let refId = null;
+        if (action === 'reference-add') {
+          refId = validImageId(body.sourceId) ? body.sourceId : await saveSource(body.dataUri);
+          if (!refId) return fail(res, 400, 'Send a photo as a JPG, PNG or WebP data URI.', { code: 'bad_request' });
+          try { await fsp.access(path.join(SOURCE_DIR, refId)); } catch { return fail(res, 404, 'That photo is no longer stored.'); }
+        }
+        const out = await changeProjects(function (store) {
+          switch (action) {
+            case 'create': return projectLib.create(store, body.name);
+            case 'rename': return projectLib.rename(store, body.id, body.name);
+            case 'archive': return projectLib.setArchived(store, body.id, body.archived !== false);
+            case 'defaults': return projectLib.setDefaults(store, body.id, body.defaults);
+            case 'delete': return projectLib.remove(store, body.id);
+            case 'move': return projectLib.move(store, body.ids, body.to === projectLib.UNSORTED ? projectLib.UNSORTED : body.to);
+            case 'reference-add': return projectLib.addReference(store, body.id, refId);
+            case 'reference-remove': return projectLib.removeReference(store, body.id, body.sourceId);
+            default: return { store: store, changed: false, error: 'No such action: ' + action };
+          }
+        });
+        if (out.error) return fail(res, out.error === 'No such project.' ? 404 : 400, out.error);
+        return sendJson(res, 200, { project: out.project || null, changed: out.changed });
       }
       if (urlPath === '/api/prompts/favourite' || urlPath === '/api/prompts/delete' || urlPath === '/api/prompts/restore') {
         if (req.method !== 'POST') return fail(res, 405, 'Use POST for ' + urlPath + '.');

@@ -66,6 +66,9 @@
       gateToggle = $('gate-password-toggle');
   var app = $('app');
   var filtersEl = $('filters');
+  var projectBtn = $('project-btn'), projectText = $('project-text'), projectPop = $('project-pop');
+  var trayEl = $('tray'), trayLabel = $('tray-label'), trayItems = $('tray-items');
+  var lbMove = $('lb-move');
   var thumbEl = $('thumb');
   var spendAmount = $('spend-amount'), spendRuns = $('spend-runs'), balanceEl = $('balance');
   var newsDialog = $('news-dialog'), newsBody = $('news-body'), newsTitle = $('news-title'), newsDate = $('news-date'),
@@ -126,6 +129,8 @@
     name: '',
     filter: 'all',
     thumb: 3,          // picture size, 1 (dense) to 5 (large)
+    // The project being worked in: null for all, 'unsorted', or a project id.
+    project: null,
     // [{ dataUri, original, originalSize, name, size, width, height, crop }] in
     // the order they will be sent. dataUri is what goes out — the crop, if any.
     sources: []
@@ -878,6 +883,7 @@
       }));
     }
     if (src.crop) actions.appendChild(panelButton('Use the whole photo', function () { clearCrop(src); renderRail(); renderChipPanel(); }));
+    if (currentProject()) actions.appendChild(panelButton('Keep with ' + currentProject().name, function () { keepChipInProject(src); }));
     actions.appendChild(panelButton('Remove', function () { removeSource(i); }, true));
     chipPanel.appendChild(actions);
 
@@ -1228,7 +1234,7 @@
       model: state.model, quality: state.quality,
       shape: state.shape, resolution: state.resolution, frames: state.frames,
       editShape: state.editShape, editResolution: state.editResolution, variants: state.variants,
-      name: state.name, filter: state.filter, thumb: state.thumb
+      name: state.name, filter: state.filter, thumb: state.thumb, project: state.project
     });
   }
 
@@ -1372,6 +1378,7 @@
     var idx = [];
     run.frames.forEach(function (f, i) {
       if (state.filter === 'fav' && !(f.image && f.image.favourite)) return;
+      if (!frameInProject(run, f)) return;
       idx.push(i);
     });
     if (state.filter === 'mine' && !sameName(run.user, state.name)) return [];
@@ -1385,7 +1392,7 @@
   async function loadLibrary() {
     if (!config || !config.savesImages) return;
     try {
-      var res = await fetch('/api/runs?favourites=1&limit=500', { headers: authHeaders({}) });
+      var res = await fetch('/api/runs?favourites=1&limit=500' + projectQuery(), { headers: authHeaders({}) });
       if (!res.ok) return;
       var payload = await res.json();
       libraryLoaded = true;
@@ -1437,7 +1444,7 @@
   function renderLibrary() {
     var pairs = [];
     runs.forEach(function (run) {
-      run.frames.forEach(function (f, i) { if (f.image && f.image.favourite) pairs.push([run, i]); });
+      run.frames.forEach(function (f, i) { if (f.image && f.image.favourite && frameInProject(run, f)) pairs.push([run, i]); });
     });
     if (!pairs.length) return 0;
     var head = el('div', 'library__head');
@@ -1472,7 +1479,7 @@
 
   async function loadPrompts() {
     try {
-      var res = await fetch('/api/prompts', { headers: authHeaders({}) });
+      var res = await fetch('/api/prompts' + projectQuery().replace('&', '?'), { headers: authHeaders({}) });
       if (res.status === 401) { lockOut(); return; }
       if (!res.ok) throw new Error('failed');
       prompts = (await res.json()).prompts || [];
@@ -1629,6 +1636,32 @@
     return list.length;
   }
 
+  // The empty page offers the way back into recent projects.
+  function renderRecentProjects() {
+    var old = empty.querySelector('.recent');
+    if (old) old.remove();
+    if (state.project || !projects.length) return;
+    var live = projects.filter(function (p) { return !p.archived; }).slice(0, 8);
+    if (!live.length) return;
+    var grid = el('div', 'recent');
+    live.forEach(function (p) {
+      var card = el('button', 'recent__card');
+      card.type = 'button';
+      if (p.cover) {
+        var img = document.createElement('img');
+        img.className = 'recent__cover';
+        img.src = '/api/image/' + p.cover;
+        img.alt = '';
+        card.appendChild(img);
+      } else card.appendChild(el('div', 'recent__cover recent__cover--empty', 'Empty'));
+      card.appendChild(el('div', 'recent__name', p.name));
+      card.appendChild(el('div', 'recent__n num', p.images + (p.images === 1 ? ' picture' : ' pictures')));
+      card.addEventListener('click', function () { setProject(p.id); });
+      grid.appendChild(card);
+    });
+    empty.insertBefore(grid, emptySeeds);
+  }
+
   function renderRuns() {
     Array.prototype.slice.call(results.querySelectorAll('.wall, .day, .library__head, .more, .assets, .assets__head')).forEach(function (n) { n.remove(); });
 
@@ -1690,8 +1723,12 @@
           ? 'Runs you make as “' + state.name.trim() + '” appear here.'
           : 'Open the menu at the top right and fill in Working as. Runs you make from then on are yours.';
       } else {
-        emptyTitle.textContent = 'Describe an image to begin';
-        emptyBody.textContent = 'Type below and generate up to ten frames at once. Add photos to edit them, or to combine several into one picture. Every run stays on this page.';
+        var cp = currentProject();
+        emptyTitle.textContent = cp ? 'Nothing in ' + cp.name + ' yet' : state.project === 'unsorted' ? 'Nothing unsorted' : 'Describe an image to begin';
+        emptyBody.textContent = cp ? 'Everything you make while this project is open lands here. Keep its reference photos in the tray above the box.'
+          : state.project === 'unsorted' ? 'Pictures made outside any project would show here.'
+          : 'Type below and generate up to ten frames at once. Add photos to edit them, or to combine several into one picture. Every run stays on this page.';
+        renderRecentProjects();
       }
     }
     renderSelectionBar();
@@ -1723,7 +1760,7 @@
     if (historyDone || loadingOlder || !oldestStamp || state.filter === 'fav') return;
     loadingOlder = true;
     try {
-      var res = await fetch('/api/runs?limit=' + PAGE + '&before=' + encodeURIComponent(oldestStamp), { headers: authHeaders({}) });
+      var res = await fetch('/api/runs?limit=' + PAGE + '&before=' + encodeURIComponent(oldestStamp) + projectQuery(), { headers: authHeaders({}) });
       if (!res.ok) { historyDone = true; return; }
       var list = (await res.json()).runs || [];
       takeRestored(list);
@@ -2011,6 +2048,11 @@
     });
     actions.appendChild(dl);
 
+    var mv = el('button', 'btn-text', 'Move to…');
+    mv.type = 'button';
+    mv.addEventListener('click', function () { var ids = Array.from(selected); moveMenu(mv, ids, function (to) { afterMove(ids, to); }); });
+    actions.appendChild(mv);
+
     var del = el('button', 'btn-text btn-text--danger', 'Delete');
     del.type = 'button';
     del.addEventListener('click', function () { deleteImages(Array.from(selected)); });
@@ -2271,6 +2313,7 @@
     lbAgain.hidden = !canRunAgain(run);
     lbDownloadAll.hidden = got < 2;
     lbDownloadAll.textContent = 'Download all ' + got;
+    lbMove.hidden = !isStored(image);
     lbEdit.title = 'Send this picture into the composer as a photo';
     lbAgain.title = 'Repeat this run exactly as it was';
     lbReuse.title = 'Put this back in the composer to change and run again';
@@ -2593,6 +2636,12 @@
   });
   lbReuse.addEventListener('click', function () { if (lightboxState) reuseRun(lightboxState.run); });
   lbAgain.addEventListener('click', function () { if (lightboxState) again(lightboxState.run); });
+  lbMove.addEventListener('click', function () {
+    if (!lightboxState) return;
+    var image = lightboxState.list[lightboxState.index];
+    if (!isStored(image)) { toast('This picture is not stored on the server, so it cannot be moved'); return; }
+    moveMenu(lbMove, [image.id], function (to) { closeLightbox(); afterMove([image.id], to); });
+  });
   lbDownloadAll.addEventListener('click', function () { if (lightboxState) downloadRun(lightboxState.run); });
   lbFav.addEventListener('click', async function () {
     if (!lightboxState) return;
@@ -2640,7 +2689,8 @@
   function setBusy(on, label) {
     busy = on;
     promptEl.disabled = on;
-    if (on) { closeMenu(false); closeHistory(); }
+    if (on) { closeMenu(false); closeHistory(); closeProjectPop(false); }
+    renderTray();
     actionBtn.disabled = on;
     actionBtn.classList.toggle('is-busy', on);
     cancelBtn.hidden = !on;
@@ -2652,9 +2702,11 @@
 
   // Progress in the browser tab, so a run can be watched from another one.
   function paintTitle(run) {
+    var p = currentProject();
+    var name = (p ? p.name + ' · ' : '') + studioName;
     document.title = run && run.status === 'running'
-      ? '(' + doneImages(run).length + '/' + run.frames.length + ') ' + studioName
-      : studioName;
+      ? '(' + doneImages(run).length + '/' + run.frames.length + ') ' + name
+      : name;
   }
 
   function notifyFinished(run) {
@@ -2708,6 +2760,7 @@
       user: state.name || '',
       consent: likenessConsent
     });
+    if (run.project) body.project = run.project;
     var controller = new AbortController();
     run.controllers.push(controller);
     return fetch('/api/images', {
@@ -2808,6 +2861,7 @@
       mode: settings.mode, model: settings.model, prompt: settings.prompt,
       quality: settings.quality, shape: settings.shape, resolution: settings.resolution,
       n: total, plan: settings.plan || 'reference', sources: settings.sources || [],
+      project: projectId(),
       ratio: settings.ratio || null, user: state.name.trim() || null,
       frames: frames, controllers: [], status: 'running',
       startedAt: Date.now(), finishedAt: null,
@@ -3360,6 +3414,7 @@
     if (e.key !== 'Escape' || !lightbox.hidden || !consentDialog.hidden) return;
     if (openChip >= 0) { e.preventDefault(); closeChipPanel(true); }
     else if (!whoPop.hidden) { e.preventDefault(); closeWho(true); }
+    else if (!projectPop.hidden) { e.preventDefault(); closeProjectPop(true); }
   });
 
   // A narrower window wraps the prompt differently; measure it again.
@@ -3375,10 +3430,440 @@
   // -------------------------------------------------------------------------
   // Top bar: filters, name, appearance
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Projects — the folder being worked in. Everything made lands in it; the
+  // gallery, library and prompts show only its things; its reference photos
+  // sit in a tray above the composer; its defaults are on the pills when it
+  // opens. 'unsorted' is everything made outside a project.
+  // -------------------------------------------------------------------------
+  var projects = [];          // [{ id, name, slug, archived, defaults, references, images, favourites, spent, cover }]
+  var unsortedInfo = { images: 0, favourites: 0, spent: 0, cover: null };
+  var projectSearch = '';
+  var projectForm = null;     // 'new' | 'rename' | null, while the popover shows a text box
+  var pendingSlug = null;     // from the address, resolved once the list arrives
+  var pendingMove = null;     // { ids, done } when "New project…" was picked from a move menu
+
+  function projectId() { return state.project && state.project !== 'unsorted' ? state.project : null; }
+  function currentProject() { return projects.find(function (p) { return p.id === state.project; }) || null; }
+  function projectQuery() { return state.project ? '&project=' + encodeURIComponent(state.project) : ''; }
+
+  // A picture's project: where the server says it is, else the run's.
+  function frameInProject(run, f) {
+    if (!state.project) return true;
+    var at = f.image && f.image.project !== undefined ? f.image.project : run.project || null;
+    return state.project === 'unsorted' ? at === null : at === state.project;
+  }
+
+  async function loadProjects() {
+    try {
+      var res = await fetch('/api/projects', { headers: authHeaders({}) });
+      if (res.status === 401) { lockOut(); return; }
+      if (!res.ok) return;
+      var j = await res.json();
+      projects = j.projects || [];
+      unsortedInfo = j.unsorted || unsortedInfo;
+    } catch (err) { /* the switcher shows what it has */ }
+    if (pendingSlug) {
+      var hit = projects.find(function (p) { return p.slug === pendingSlug; });
+      pendingSlug = null;
+      // Arriving by link applies the project's defaults; a plain reload of
+      // the page that was already in it leaves the settings alone.
+      if (hit) { setProject(hit.id, { quiet: state.project === hit.id }); return; }
+    }
+    if (state.project && state.project !== 'unsorted' && !currentProject()) state.project = null;
+    renderProjectPill();
+    renderTray();
+    if (!projectPop.hidden) renderProjectPop();
+    if (!runs.length && !historyLoading) renderRuns();   // the empty page lists recent projects
+  }
+
+  function projectAction(action, body) {
+    return fetch('/api/projects/' + action, {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body)
+    }).then(function (res) {
+      if (res.status === 401) { lockOut(); throw new Error('locked'); }
+      return res.json().then(function (j) { if (!res.ok) throw new Error(j && j.error || 'failed'); return j; });
+    });
+  }
+
+  function renderProjectPill() {
+    var p = currentProject();
+    projectText.textContent = state.project === 'unsorted' ? 'Unsorted' : p ? p.name : 'All projects';
+    projectBtn.classList.toggle('is-on', Boolean(state.project));
+    projectBtn.title = p ? 'Working in ' + p.name : state.project === 'unsorted' ? 'Pictures made outside any project' : 'Pick a project to work in';
+    paintTitle(null);
+  }
+
+  // Opening a project: the address, the pill, the history, the tray, and the
+  // composer settings the project asks for.
+  function setProject(id, opts) {
+    opts = opts || {};
+    var next = id === 'unsorted' ? 'unsorted' : projects.some(function (p) { return p.id === id; }) ? id : null;
+    var changed = next !== state.project;
+    state.project = next;
+    var p = currentProject();
+    var want = state.filter === 'assets' ? '/asset' : p ? '/p/' + p.slug : next === 'unsorted' ? '/p/unsorted' : '/';
+    if (location.pathname !== want) { try { history.replaceState(null, '', want); } catch (err) { /* file:// */ } }
+    if (p && p.defaults && changed && !opts.quiet) applyDefaults(p.defaults);
+    renderProjectPill();
+    renderTray();
+    persist();
+    if (changed || opts.reload) {
+      runs = runs.filter(function (r) { return r.status === 'running'; });
+      historyDone = true; oldestStamp = null; libraryLoaded = false; prompts = null;
+      renderRuns();
+      loadSavedRuns();
+      if (state.filter === 'fav') loadLibrary();
+    }
+    renderRail();
+  }
+
+  function applyDefaults(d) {
+    var prices = (config && config.prices) || {};
+    if (d.model && prices[d.model] && !modelIsRetired(d.model)) { state.model = d.model; retiredFallback = null; buildModelOptions(); }
+    if (d.shape && SHAPES.indexOf(d.shape) !== -1) { state.shape = d.shape; state.editShape = d.shape; }
+    if (d.resolution && RESOLUTIONS.indexOf(d.resolution) !== -1) { state.resolution = d.resolution; state.editResolution = d.resolution; }
+    if (d.quality) state.quality = d.quality;
+  }
+
+  // ---- the switcher popover
+  function projectIcon(kind) {
+    var holder = document.createElement('span');
+    holder.innerHTML = kind === 'inbox'
+      ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M2 9.5l1.6-5.5h8.8L14 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M2 9.5h3.5a2.5 2.5 0 0 0 5 0H14"/></svg>'
+      : kind === 'all'
+        ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4.5A1.5 1.5 0 0 1 3 3h3l1.5 1.5H13A1.5 1.5 0 0 1 14.5 6v6A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12z"/></svg>';
+    return holder.firstChild;
+  }
+
+  function projectRow(kind, id, name, count, current) {
+    var row = el('button', 'prow' + (kind === 'new' ? ' prow--new' : ''));
+    row.type = 'button';
+    row.setAttribute('aria-current', String(Boolean(current)));
+    if (kind !== 'new') row.appendChild(projectIcon(kind));
+    row.appendChild(el('span', 'prow__name', name));
+    if (count != null) row.appendChild(el('span', 'prow__n num', String(count)));
+    return row;
+  }
+
+  function renderProjectPop() {
+    projectPop.innerHTML = '';
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'input projects__search';
+    search.placeholder = 'Find a project';
+    search.setAttribute('aria-label', 'Find a project');
+    search.value = projectSearch;
+    search.addEventListener('input', function () {
+      projectSearch = search.value;
+      var at = search.selectionStart;
+      renderProjectPop();
+      var again = projectPop.querySelector('.projects__search');
+      if (again) { again.focus(); again.setSelectionRange(at, at); }
+    });
+    projectPop.appendChild(search);
+
+    var list = el('div', 'projects__list');
+    var needle = projectSearch.trim().toLowerCase();
+    var live = projects.filter(function (p) { return !p.archived && (!needle || p.name.toLowerCase().indexOf(needle) !== -1); });
+    var archived = projects.filter(function (p) { return p.archived && needle && p.name.toLowerCase().indexOf(needle) !== -1; });
+    if (!needle) {
+      var all = projectRow('all', null, 'All projects', null, !state.project);
+      all.addEventListener('click', function () { setProject(null); closeProjectPop(true); });
+      list.appendChild(all);
+    }
+    live.forEach(function (p) {
+      var row = projectRow('folder', p.id, p.name, p.images, state.project === p.id);
+      row.addEventListener('click', function () { setProject(p.id); closeProjectPop(true); });
+      list.appendChild(row);
+    });
+    archived.forEach(function (p) {
+      var row = projectRow('folder', p.id, p.name + ' (archived)', p.images, state.project === p.id);
+      row.classList.add('prow--muted');
+      row.addEventListener('click', function () { setProject(p.id); closeProjectPop(true); });
+      list.appendChild(row);
+    });
+    if (!needle || 'unsorted'.indexOf(needle) !== -1) {
+      var un = projectRow('inbox', 'unsorted', 'Unsorted', unsortedInfo.images, state.project === 'unsorted');
+      un.addEventListener('click', function () { setProject('unsorted'); closeProjectPop(true); });
+      list.appendChild(un);
+    }
+    if (needle && !live.length && !archived.length) list.appendChild(el('div', 'pcardx__note', 'No project called that.'));
+    projectPop.appendChild(list);
+
+    projectPop.appendChild(el('div', 'projects__rule'));
+    if (projectForm === 'new' || projectForm === 'rename') {
+      var p0 = currentProject();
+      var form = el('div', 'projects__form');
+      var name = document.createElement('input');
+      name.className = 'input';
+      name.maxLength = 60;
+      name.placeholder = projectForm === 'new' ? 'Project name — “Summer gens”' : 'New name';
+      name.value = projectForm === 'rename' && p0 ? p0.name : (needle || '');
+      name.setAttribute('aria-label', projectForm === 'new' ? 'New project name' : 'New name');
+      var okBtn = el('button', 'btn-primary', projectForm === 'new' ? 'Create' : 'Rename');
+      okBtn.type = 'button';
+      var submit = function () {
+        var text = name.value.trim();
+        if (!text) { name.focus(); return; }
+        var req = projectForm === 'new' ? projectAction('create', { name: text }) : projectAction('rename', { id: p0.id, name: text });
+        req.then(function (j) {
+          projectForm = null; projectSearch = '';
+          var made = j.project && name.dataset.mode === 'new' ? j.project : null;
+          // Pictures that were waiting for this project go in before it opens.
+          var carry = made && pendingMove ? pendingMove : null;
+          pendingMove = null;
+          var moved = carry ? projectAction('move', { ids: carry.ids, to: made.id }).then(function () { if (carry.done) carry.done(made.id); }, function () { toast('The pictures could not be moved'); }) : Promise.resolve();
+          return moved.then(loadProjects).then(function () {
+            if (made) setProject(made.id); else renderProjectPill();
+            renderProjectPop();
+            toast(!made ? 'Project renamed' : carry ? 'Moved to ' + made.name + ' — you are in it now' : 'Project created — you are in it now');
+          });
+        }, function (e) { toast(e.message || 'That could not be saved'); });
+      };
+      name.dataset.mode = projectForm;
+      name.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); projectForm = null; pendingMove = null; renderProjectPop(); }
+      });
+      okBtn.addEventListener('click', submit);
+      form.appendChild(name);
+      form.appendChild(okBtn);
+      projectPop.appendChild(form);
+      setTimeout(function () { name.focus(); name.select(); }, 0);
+    } else {
+      var make = projectRow('new', null, 'New project', null, false);
+      make.addEventListener('click', function () { projectForm = 'new'; renderProjectPop(); });
+      projectPop.appendChild(make);
+    }
+
+    var p = currentProject();
+    if (p) projectPop.appendChild(projectCard(p));
+  }
+
+  // The open project's card: what is in it, what it opens with, what to do.
+  function projectCard(p) {
+    var card = el('div', 'pcardx');
+    var nameRow = el('div', 'pcardx__name', p.name);
+    if (p.archived) nameRow.appendChild(el('span', 'chip-tag', 'Archived'));
+    card.appendChild(nameRow);
+    var facts = el('div', 'pcardx__facts num');
+    var fact = function (k, v) { facts.appendChild(el('span', null, k)); var b = el('b', null, v); facts.appendChild(b); };
+    fact('Pictures', p.images + (p.favourites ? ' · ' + p.favourites + ' in library' : ''));
+    fact('References', p.references.length ? p.references.length + (p.references.length === 1 ? ' photo' : ' photos') : 'none yet');
+    var d = p.defaults, prices = (config && config.prices) || {};
+    fact('Opens with', d ? [d.model && prices[d.model] ? prices[d.model].label : null, d.shape, d.resolution ? d.resolution.toUpperCase() : null, d.quality && d.quality !== 'auto' ? d.quality : null].filter(Boolean).join(' · ') || 'the usual settings' : 'the usual settings');
+    fact('Spent', money(p.spent || 0) + ' in this project');
+    card.appendChild(facts);
+
+    var acts = el('div', 'pcardx__acts');
+    var link = function (text, fn, danger) {
+      var b = el('button', 'btn-text' + (danger ? ' btn-text--danger' : ''), text);
+      b.type = 'button';
+      b.addEventListener('click', fn);
+      acts.appendChild(b);
+      return b;
+    };
+    link('Rename', function () { projectForm = 'rename'; renderProjectPop(); });
+    link('Use current settings as its defaults', function () {
+      projectAction('defaults', { id: p.id, defaults: { model: state.model, shape: currentShape(), resolution: currentResolution(), quality: acceptsQuality(state.model) ? state.quality : undefined } })
+        .then(function () { return loadProjects(); }).then(function () { renderProjectPop(); toast('Saved — ' + p.name + ' opens with these settings'); }, function () { toast('That could not be saved'); });
+    });
+    if (p.defaults) link('Clear defaults', function () {
+      projectAction('defaults', { id: p.id, defaults: {} }).then(function () { return loadProjects(); }).then(function () { renderProjectPop(); }, function () { toast('That could not be saved'); });
+    });
+    link(p.archived ? 'Unarchive' : 'Archive', function () {
+      projectAction('archive', { id: p.id, archived: !p.archived }).then(function () { return loadProjects(); }).then(function () { renderProjectPop(); toast(p.archived ? 'Project unarchived' : 'Project archived — find it by searching its name'); }, function () { toast('That could not be saved'); });
+    });
+    // Delete asks twice: the first click arms, the second does it.
+    var armed = false, disarm = null;
+    link('Delete', function () {
+      if (!armed) {
+        armed = true; this.textContent = 'Delete this project? Pictures stay'; this.classList.add('is-armed');
+        var self = this;
+        disarm = setTimeout(function () { armed = false; self.textContent = 'Delete'; self.classList.remove('is-armed'); }, 4000);
+        return;
+      }
+      clearTimeout(disarm);
+      projectAction('delete', { id: p.id }).then(function () {
+        state.project = null;
+        return loadProjects();
+      }).then(function () { setProject(null, { reload: true }); renderProjectPop(); toast('Project deleted — its pictures are in Unsorted'); },
+        function () { toast('The project could not be deleted'); });
+    }, true);
+    card.appendChild(acts);
+    card.appendChild(el('div', 'pcardx__note', 'Deleting a project keeps its pictures: they go to Unsorted.'));
+    return card;
+  }
+
+  function openProjectPop() {
+    closeWho(false);
+    projectForm = null; projectSearch = '';
+    renderProjectPop();
+    projectPop.hidden = false;
+    projectBtn.setAttribute('aria-expanded', 'true');
+    var s = projectPop.querySelector('.projects__search');
+    if (s) s.focus();
+    loadProjects();   // fresh counts
+  }
+  function closeProjectPop(refocus) {
+    if (projectPop.hidden) return;
+    projectPop.hidden = true;
+    projectForm = null;
+    pendingMove = null;
+    projectBtn.setAttribute('aria-expanded', 'false');
+    if (refocus) projectBtn.focus();
+  }
+  projectBtn.addEventListener('click', function () { if (projectPop.hidden) openProjectPop(); else closeProjectPop(true); });
+  document.addEventListener('mousedown', function (e) {
+    if (!projectPop.hidden && !projectPop.contains(e.target) && !projectBtn.contains(e.target)) closeProjectPop(false);
+  });
+  projectPop.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeProjectPop(true); }
+  });
+
+  // ---- the reference tray
+  function renderTray() {
+    var p = currentProject();
+    trayEl.hidden = !p;
+    trayItems.innerHTML = '';
+    if (!p) return;
+    trayLabel.textContent = p.name;
+    trayLabel.title = 'Photos kept with ' + p.name + '. Click one to attach it.';
+    p.references.forEach(function (id) {
+      var item = el('div', 'tray__item');
+      item.setAttribute('role', 'listitem');
+      var pick = el('button', 'tray__pick');
+      pick.type = 'button';
+      pick.disabled = busy;
+      pick.title = 'Attach this photo';
+      pick.setAttribute('aria-label', 'Attach reference photo');
+      var img = document.createElement('img');
+      img.src = '/api/source/' + id;
+      img.alt = '';
+      pick.appendChild(img);
+      pick.addEventListener('click', async function () {
+        if (busy || state.sources.length >= MAX_SOURCES) return;
+        var uri;
+        try { uri = await toDataUri('/api/source/' + id); } catch (err) { toast('That photo could not be loaded'); return; }
+        addSources([await probe(uri, 'reference.' + (id.split('.').pop() || 'png'))]);
+        promptEl.focus();
+      });
+      item.appendChild(pick);
+      var drop = el('button', 'tray__drop');
+      drop.type = 'button';
+      drop.setAttribute('aria-label', 'Remove from the project’s references');
+      drop.title = 'Remove from references';
+      drop.appendChild(icon('x', 9));
+      drop.addEventListener('click', function () {
+        projectAction('reference-remove', { id: p.id, sourceId: id }).then(function () { return loadProjects(); }, function () { toast('That could not be removed'); });
+      });
+      item.appendChild(drop);
+      trayItems.appendChild(item);
+    });
+    var add = el('button', 'tray__add');
+    add.type = 'button';
+    add.title = p.references.length ? 'Keep another photo with ' + p.name : 'Keep a reference photo with ' + p.name + ' — one click attaches it';
+    add.setAttribute('aria-label', 'Add a reference photo to the project');
+    add.innerHTML = '<svg width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 3.5v11M3.5 9h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    add.addEventListener('click', function () { trayInput.click(); });
+    trayItems.appendChild(add);
+  }
+
+  // Photos chosen for the tray go straight to the project, not the composer.
+  var trayInput = document.createElement('input');
+  trayInput.type = 'file';
+  trayInput.accept = 'image/jpeg,image/png,image/webp';
+  trayInput.multiple = true;
+  trayInput.className = 'visually-hidden';
+  trayInput.tabIndex = -1;
+  document.body.appendChild(trayInput);
+  trayInput.addEventListener('change', async function () {
+    var p = currentProject();
+    var files = Array.prototype.slice.call(trayInput.files || []);
+    trayInput.value = '';
+    if (!p || !files.length) return;
+    var loaded = await Promise.all(files.filter(function (f) { return ACCEPTED_TYPES.indexOf(f.type) !== -1 && f.size <= MAX_UPLOAD_BYTES; }).map(readOneFile));
+    var n = 0;
+    for (var i = 0; i < loaded.length; i++) {
+      if (!loaded[i]) continue;
+      try { await projectAction('reference-add', { id: p.id, dataUri: loaded[i].dataUri }); n++; }
+      catch (e) { toast(e.message || 'That photo could not be kept'); break; }
+    }
+    await loadProjects();
+    if (n) toast(n === 1 ? 'Photo kept with ' + p.name : n + ' photos kept with ' + p.name);
+  });
+
+  // Keep an attached photo with the project, from the chip's menu.
+  function keepChipInProject(src) {
+    var p = currentProject();
+    if (!p) return;
+    projectAction('reference-add', { id: p.id, dataUri: src.original || src.dataUri })
+      .then(function () { return loadProjects(); }).then(function () { toast('Kept with ' + p.name); }, function (e) { toast(e.message || 'That could not be kept'); });
+  }
+
+  // ---- moving pictures
+  function moveMenu(anchor, ids, done) {
+    var menu = el('div', 'pillmenu movemenu');
+    menu.setAttribute('role', 'listbox');
+    menu.appendChild(el('div', 'pillmenu__title', 'Move ' + ids.length + (ids.length === 1 ? ' picture to' : ' pictures to')));
+    var row = function (label, to, muted) {
+      var b = el('button', 'pillmenu__row');
+      b.type = 'button';
+      b.setAttribute('role', 'option');
+      var main = el('span', 'pillmenu__main');
+      main.appendChild(el('span', 'pillmenu__label' + (muted ? ' pillmenu__note' : ''), label));
+      b.appendChild(main);
+      b.addEventListener('click', function () {
+        close();
+        projectAction('move', { ids: ids, to: to }).then(function () {
+          var name = to === 'unsorted' ? 'Unsorted' : (projects.find(function (p) { return p.id === to; }) || {}).name;
+          toast('Moved to ' + name);
+          if (done) done(to);
+        }, function () { toast('The pictures could not be moved'); });
+      });
+      menu.appendChild(b);
+      return b;
+    };
+    projects.filter(function (p) { return !p.archived && p.id !== state.project; }).forEach(function (p) { row(p.name, p.id); });
+    if (state.project !== 'unsorted') row('Unsorted', 'unsorted', true);
+    var make = row('New project…', null, true);
+    make.onclick = null;
+    make.addEventListener('click', function (e) {
+      e.stopImmediatePropagation(); close(); closeLightbox();
+      pendingMove = { ids: ids, done: done };
+      openProjectPop(); projectForm = 'new'; renderProjectPop();
+    }, true);
+    function close() { menu.remove(); document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', esc, true); }
+    function away(e) { if (!menu.contains(e.target)) close(); }
+    function esc(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = (r.top - menu.offsetHeight - 8 > 8 ? r.top - menu.offsetHeight - 8 : r.bottom + 8) + 'px';
+    setTimeout(function () { document.addEventListener('mousedown', away, true); document.addEventListener('keydown', esc, true); }, 0);
+    var first = menu.querySelector('button');
+    if (first) first.focus();
+  }
+
+  // After a move, pictures leave the view they were moved out of.
+  function afterMove(ids, to) {
+    var gone = {};
+    ids.forEach(function (id) { gone[id] = true; });
+    runs.forEach(function (run) {
+      run.frames.forEach(function (f) { if (f.image && gone[f.image.id]) f.image.project = to === 'unsorted' ? null : to; });
+    });
+    selected.clear();
+    renderRuns();
+    loadProjects();
+  }
+
   function setFilter(f) {
     state.filter = f === 'fav' || f === 'mine' || f === 'assets' ? f : 'all';
     // Prompts has its own address, so it can be bookmarked and sent to someone.
-    var want = state.filter === 'assets' ? '/asset' : '/';
+    var p = currentProject();
+    var want = state.filter === 'assets' ? '/asset' : p ? '/p/' + p.slug : state.project === 'unsorted' ? '/p/unsorted' : '/';
     if (location.pathname !== want) { try { history.replaceState(null, '', want); } catch (err) { /* file:// */ } }
     if (state.filter === 'assets' && prompts !== null) loadPrompts();   // fresh each visit
     Array.prototype.slice.call(filtersEl.querySelectorAll('.seg__btn')).forEach(function (b) {
@@ -3686,6 +4171,7 @@
     renderRail();
     autosize();
     promptEl.focus();
+    loadProjects().then(function () { if (pendingSlug === null) renderProjectPill(); });
     loadSavedRuns();
     refreshBalance();
     checkNews();
@@ -3705,7 +4191,7 @@
     historyLoading = true;
     renderRuns();
     try {
-      var res = await fetch('/api/runs?limit=' + PAGE, { headers: authHeaders({}) });
+      var res = await fetch('/api/runs?limit=' + PAGE + projectQuery(), { headers: authHeaders({}) });
       if (!res.ok) return;
       var list = (await res.json()).runs || [];
       historyDone = list.length < PAGE;
@@ -3724,7 +4210,7 @@
           return { status: 'done', error: null, image: {
             id: img.id, src: '/api/image/' + img.id, ext: (img.id.split('.').pop() || 'png'),
             bytes: 0, width: 0, height: 0, frame: img.frame,
-            favourite: Boolean(img.favourite), revised_prompt: null
+            favourite: Boolean(img.favourite), revised_prompt: null, project: img.project || null
           } };
         });
         var at = Date.parse(r.timestamp) || Date.now();
@@ -3741,6 +4227,7 @@
           sourceCount: r.reference ? (r.sources || kept.length) : Math.max(kept.length, typeof r.sources === 'number' ? r.sources : 0),
           // The photos it was made from, if the server still has every one.
           sources: [], sourceIds: kept,
+          project: r.project || null,
           ratio: null, user: r.user || null,
           frames: frames, controllers: [], status: 'done', startedAt: at, finishedAt: at,
           cost: r.cost, counted: true, cancelled: false, degraded: false, restored: true
@@ -3787,6 +4274,10 @@
     state.name = saved.name || '';
     state.filter = saved.filter === 'fav' || saved.filter === 'mine' ? saved.filter : 'all';
     if (/^\/assets?\/?$/.test(location.pathname)) state.filter = 'assets';
+    // The project: the address wins, then what was open last time.
+    state.project = typeof saved.project === 'string' ? saved.project : null;
+    var m = /^\/p\/([a-z0-9-]*)\/?$/.exec(location.pathname);
+    if (m) { if (m[1] === 'unsorted') state.project = 'unsorted'; else if (m[1]) pendingSlug = m[1]; else state.project = null; }
     state.thumb = Math.min(5, Math.max(1, Number(saved.thumb) || 3));
     applyThumb();
 
@@ -3794,7 +4285,7 @@
     studioName = (config.studioName || 'Imagine studio');
     $('brand-name').textContent = studioName;
     $('gate-title').textContent = studioName;
-    document.title = studioName;
+    paintTitle(null);
     setAccent(readStore(ACCENT_KEY));
     notifyEl.checked = readStore(NOTIFY_KEY) === true && window.Notification && Notification.permission === 'granted';
 

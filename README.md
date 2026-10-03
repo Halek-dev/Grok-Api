@@ -562,6 +562,33 @@ one run count once. Past 500 entries the least recently used go first, never a
 favourite. The file is in `.gitignore`. Like everything else it needs
 `DATA_DIR` to be on a mounted volume to survive a deploy.
 
+### Projects
+
+A project is a folder the team works inside. Pick one from the switcher at the
+top left (or make one there) and everything from then on lands in it: the
+gallery, the Library and Prompts show only its things, the composer opens with
+the settings the project asks for, and the photos kept with it sit in a tray
+above the box — one click attaches one. The address carries the project
+(`/p/summer-gens`), so a link opens the team on the same work.
+
+- **Unsorted** is everything made outside a project, including all the history
+  from before projects existed. **All projects** shows the lot.
+- Pictures move between projects from the viewer (*Move to…*) or the selection
+  bar; a run split across projects shows in each only the frames placed there.
+  Spend stays with the project a run was made in.
+- A project can be renamed, archived (hidden from the switcher until searched
+  for by name) and deleted. **Deleting never deletes pictures**: they go to
+  Unsorted.
+- *Use current settings as its defaults* on the project card pins a model,
+  shape, resolution and quality; opening the project — or arriving by its link
+  — puts them on the pills.
+- Up to 24 reference photos per project, kept in `DATA_DIR/sources` like any
+  attached photo and never cleared while the project holds them.
+
+One level, no nesting, team-wide — there are no accounts, so a project is not
+someone's; it is the team's. Stored in `DATA_DIR/projects.json` (gitignored):
+the list of projects and, per picture, where it was moved to.
+
 ### Showing what is left of the credit
 
 *Spent today* is this app's own count. What is actually left on the xAI account
@@ -794,13 +821,17 @@ not `node ../server.js`.
 ```
 server.js              the proxy, key handling, usage log, saved images
 lib/imagine.js         price table, limits, the request builder and cost reading
+lib/projects.js        projects: the folders, where pictures were moved, references
+lib/prompts.js         the prompt library
+lib/balance.js         what is left of the credit, from xAI's billing answers
+lib/shutdown.js        the clean stop on SIGTERM
 public/index.html
 public/styles.css
 public/app.js          vanilla JS, no framework
 public/request-body.js the body the page sends per frame; shared with the tests
-test/request.test.js   node --test; run with npm test
+test/*.test.js         node --test; run with npm test
 .env.example
-.gitignore             excludes .env and usage.jsonl
+.gitignore             excludes .env and the data files (usage.jsonl, images, prompts, projects)
 usage.jsonl            created on the first successful run
 ```
 

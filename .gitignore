@@ -14,6 +14,9 @@ favourites.json
 # The team's prompt library. Their words, not the repo's.
 prompts.json
 prompts.json.tmp
+# The team's projects and which pictures sit in which.
+projects.json
+projects.json.tmp
 
 node_modules/
 npm-debug.log*

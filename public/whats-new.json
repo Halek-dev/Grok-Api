@@ -1,5 +1,17 @@
 [
   {
+    "id": "2026-10-04",
+    "date": "4 October 2026",
+    "title": "Projects",
+    "items": [
+      { "title": "Folders to work inside", "body": "Pick a project from the switcher at the top left, or make one there. Everything you generate lands in it, and the gallery, Library and Prompts show only its things. Unsorted holds everything made outside a project." },
+      { "title": "Its own reference photos", "body": "Keep the photos a project reuses in the tray above the box. One click attaches one. Add from the + or from an attached photo's menu — Keep with this project." },
+      { "title": "Opens with the right settings", "body": "On the project card, Use current settings as its defaults. Opening the project, or arriving by its link, puts them on the pills." },
+      { "title": "Move pictures", "body": "Move to… in the viewer or the selection bar sends pictures to another project, to Unsorted, or to a new one. Deleting a project never deletes pictures — they go to Unsorted." },
+      { "title": "A link to the work", "body": "The address carries the project — /p/summer-gens — so a link opens a teammate on the same pictures, with the same settings." }
+    ]
+  },
+  {
     "id": "2026-09-21",
     "date": "21 September 2026",
     "title": "A new studio",

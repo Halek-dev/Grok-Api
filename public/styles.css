@@ -367,6 +367,93 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .sizer input::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--structure); border: 0; }
 .sizer input:focus-visible { box-shadow: 0 0 0 2px var(--page), 0 0 0 4px var(--structure); border-radius: 8px; }
 
+.switcher { position: relative; }
+.pill--project { height: 30px; max-width: 220px; }
+.pill--project .pill__text { overflow: hidden; text-overflow: ellipsis; }
+.popover--projects { left: 0; top: 40px; width: 300px; padding: 8px; }
+.projects__search { height: 34px; margin-bottom: 6px; font-size: 13px; }
+.projects__list { max-height: 46vh; overflow-y: auto; margin: 0 -2px; }
+.prow {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 7px 8px;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--text);
+  font-size: 13px; text-align: left;
+  cursor: pointer;
+}
+.prow:hover, .prow:focus-visible { background: var(--wash); box-shadow: none; }
+.prow[aria-current='true'] { background: var(--structure); color: var(--on-structure); }
+.prow[aria-current='true'] .prow__n { color: inherit; opacity: 0.8; }
+.prow svg { flex: 0 0 auto; color: var(--muted); }
+.prow[aria-current='true'] svg { color: inherit; }
+.prow__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow__n { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+.prow--new { color: var(--structure); font-weight: 500; }
+.prow--muted { color: var(--muted); }
+.projects__rule { border-top: 1px solid var(--border); margin: 6px 0; }
+.projects__form { display: flex; gap: 6px; margin-top: 6px; }
+.projects__form .input { height: 34px; font-size: 13px; }
+.projects__form .btn-primary { height: 34px; padding: 0 14px; font-size: 13px; }
+
+/* The open project's card: counts, what it opens with, and what can be done. */
+.pcardx { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 10px; font-size: 12.5px; }
+.pcardx__name { font-size: 14px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.pcardx__facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; color: var(--muted); margin-bottom: 10px; }
+.pcardx__facts b { color: var(--text); font-weight: 500; }
+.pcardx__acts { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.pcardx__note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* Reference tray above the composer. */
+.tray { display: flex; align-items: center; gap: 8px; padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.tray__label { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray__items { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; flex: 1 1 auto; min-width: 0; padding: 2px; }
+.tray__items::-webkit-scrollbar { display: none; }
+.tray__item { position: relative; flex: 0 0 auto; width: 40px; height: 40px; }
+.tray__pick {
+  width: 100%; height: 100%; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  overflow: hidden; background: var(--sunken); cursor: pointer;
+  transition: border-color var(--t), transform var(--t);
+}
+.tray__pick:hover { border-color: var(--structure); transform: translateY(-1px); }
+.tray__pick img { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.tray__drop {
+  position: absolute; top: -5px; right: -5px;
+  width: 16px; height: 16px; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: 50%;
+  background: var(--raised); color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: 0; transition: opacity var(--t);
+}
+.tray__item:hover .tray__drop, .tray__item:focus-within .tray__drop { opacity: 1; }
+@media (hover: none) { .tray__drop { opacity: 1; } }
+.tray__drop:hover { background: var(--danger); border-color: var(--danger); color: #1a0806; }
+.tray__add {
+  flex: 0 0 auto; width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.tray__add:hover { border-color: var(--structure); color: var(--text); }
+.composer.is-idle .tray { display: none; }
+
+/* Picking a destination: the same menu the pills use, from the viewer or the bar. */
+.pillmenu.movemenu { position: fixed; z-index: 130; max-width: min(360px, calc(100vw - 16px)); }
+
+/* Recent projects on the empty page. */
+.recent { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 22px; text-align: left; }
+.recent__card {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 0; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden; cursor: pointer; text-align: left;
+  transition: border-color var(--t), transform var(--t);
+}
+.recent__card:hover { border-color: var(--structure); transform: translateY(-2px); }
+.recent__cover { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--sunken); }
+.recent__cover--empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+.recent__name { padding: 0 10px; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent__n { padding: 0 10px 10px; font-size: 12px; color: var(--muted); }
+
 .who { position: relative; }
 .avatar {
   width: 32px; height: 32px;
@@ -1376,11 +1463,18 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
    ========================================================================== */
 
 @media (max-width: 760px) {
-  .topbar { padding: 0 14px; gap: 10px; }
-  .topbar__brand span:last-child { display: none; }
+  .topbar { padding: 0 12px; gap: 8px; }
+  /* The project switcher takes the brand's place: a folder, lit when a
+     project is open. The name is in the tray and the switcher itself. */
+  .topbar__brand { display: none; }
+  .pill--project { width: 38px; max-width: none; padding: 0; justify-content: center; }
+  .pill--project .pill__text, .pill--project svg:last-child { display: none; }
+  .pill--project.is-on { border-color: var(--structure); color: var(--structure); }
+  .popover--projects { position: fixed; left: 12px; right: 12px; top: calc(var(--topbar-h) + 4px); width: auto; }
+  .projects__list { max-height: 36vh; }
   .topbar__spend-label, .topbar__spend-runs { display: none; }
   .topbar__spend { gap: 6px; font-size: 12px; }
-  .seg__btn { padding: 5px 10px; }
+  .seg__btn { padding: 5px 8px; }
   .stage { padding: 14px 12px calc(var(--dock-h) + 28px); }
   .wall { grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb, 300px), 44vw), 1fr)); column-gap: 8px; }
   .wall .frame { margin-bottom: 8px; }
