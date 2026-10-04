@@ -591,7 +591,8 @@ the list of projects and, per picture, where it was moved to.
 
 ### Showing what is left of the credit
 
-*Spent today* is this app's own count. What is actually left on the xAI account
+*Spent today* is this app's own count from its usage log: everyone on the
+team, since midnight in the viewer's own time zone. What is actually left on the xAI account
 can only be read from xAI's **Management API**, a separate service with its own
 key. It is optional:
 
@@ -600,20 +601,26 @@ key. It is optional:
 3. Restart. The top bar now reads `Spent today $2.40 · $41.27 left`.
 
 The server makes two read-only billing calls, caches the answer for a minute,
-and never sends the key to the browser. What is left is read from
-`coreInvoice.prepaidCredits` in xAI's invoice preview, which is the figure the
+and never sends the key to the browser. What is left is read from xAI's
+invoice preview as `coreInvoice.prepaidCredits` (the credit held at the start
+of the billing cycle) less `coreInvoice.prepaidCreditsUsed` (what the cycle
+has used so far, the sum of the invoice's lines) — which is the figure the
 console shows as *Credits remaining*; hovering the amount also shows how much
 was bought in all and how much has been used. Under $5 it turns amber. If the
 key is missing, wrong, or xAI is not answering, the amount is simply not shown
 — nothing about generating depends on it — and the reason is printed once in
 the deploy log as `[balance]`.
 
-> The first version read the prepaid ledger's `total` instead, as the
-> documentation suggests, and showed $75.00 against a real $51.70: on a live
-> account that total held only the purchases, with a month of spend never
-> posted to it. The formula is now pinned by a test built from the real
-> responses. If the two ever disagree again, the console is right — check
-> `lib/balance.js` against a fresh response before trusting either.
+> This took three attempts. The first read the prepaid ledger's `total`, as
+> the documentation suggests, and showed $75.00 against a real $51.70: that
+> total held only the purchases, with a month of spend never posted to it.
+> The second read `prepaidCredits` alone and matched the console on 2 October
+> — then sat on $51.70 for two days of work, because that field is the
+> opening credit of the cycle and the cycle had had no spend yet on the day
+> it was checked. The formula is now pinned by tests built from both real
+> responses. If it ever disagrees with the console again, the console is
+> right — check `lib/balance.js` against a fresh response before trusting
+> either.
 
 ### The photos attached to edits are kept
 

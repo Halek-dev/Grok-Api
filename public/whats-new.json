@@ -4,6 +4,7 @@
     "date": "4 October 2026",
     "title": "Projects, and the older pictures are back",
     "items": [
+      { "title": "The money is right", "body": "“Spent today” is now what everyone on the team has spent since midnight, your time — it used to count only this browser. And the “left” figure now moves as you work: xAI reports the cycle's spend in a separate field, which was being missed." },
       { "title": "Older pictures are back", "body": "The gallery had been stopping early: once enough recent runs were deleted, it took a short first page for the end of the history and never loaded the rest. Nothing was lost — scroll down and it is all there." },
       { "title": "Folders to work inside", "body": "Pick a project from the switcher at the top left, or make one there. Everything you generate lands in it, and the gallery, Library and Prompts show only its things. Unsorted holds everything made outside a project." },
       { "title": "Its own reference photos", "body": "Keep the photos a project reuses in the tray above the box. One click attaches one. Add from the + or from an attached photo's menu — Keep with this project." },

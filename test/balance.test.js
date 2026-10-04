@@ -34,6 +34,44 @@ test('the real account: $51.70 left, as the console says — not the ledger\'s $
   assert.deepEqual(remainingFrom(REAL_PREVIEW, REAL_LEDGER), { remaining: 51.7, purchased: 75, used: 23.3 });
 });
 
+// The same account on 4 October 2026, two days into the cycle: the opening
+// credit is unchanged and the cycle's spend sits in prepaidCreditsUsed, which
+// equals the sum of the invoice lines (1176 cents). The console at that moment
+// read $39.94. Reading prepaidCredits alone showed $51.70 while money was going.
+const REAL_PREVIEW_MID_CYCLE = {
+  coreInvoice: {
+    lines: [
+      { description: 'API grok-imagine-image-2.0', unitType: 'Generated image', numUnits: '9', amount: '72' },
+      { description: 'API grok-imagine-image-2.0', unitType: 'Image edit input images', numUnits: '9', amount: '9' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Generated image', numUnits: '1', amount: '5' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Generated image', numUnits: '23', amount: '161' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Image edit input images', numUnits: '27', amount: '27' },
+      { description: 'API grok-imagine-image-2.0', unitType: 'Generated image', numUnits: '43', amount: '344' },
+      { description: 'API grok-imagine-image-2.0', unitType: 'Image edit input images', numUnits: '46', amount: '46' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Generated image', numUnits: '5', amount: '25' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Generated image', numUnits: '59', amount: '413' },
+      { description: 'API grok-imagine-image-quality', unitType: 'Image edit input images', numUnits: '74', amount: '74' }
+    ],
+    totalWithCorr: { val: '1176' },
+    prepaidCredits: { val: '-5170' },
+    prepaidCreditsUsed: { val: '-1176' }
+  },
+  billingCycle: { year: 2026, month: 10 }
+};
+
+test('mid-cycle: the spend so far this cycle comes off the opening credit — $39.94, not $51.70', () => {
+  const lines = REAL_PREVIEW_MID_CYCLE.coreInvoice.lines.reduce((n, l) => n + Number(l.amount), 0);
+  assert.equal(lines, 1176);
+  assert.deepEqual(remainingFrom(REAL_PREVIEW_MID_CYCLE, REAL_LEDGER), { remaining: 39.94, purchased: 75, used: 35.06 });
+  // The sign of prepaidCreditsUsed is not trusted: a positive one means the same.
+  const flipped = JSON.parse(JSON.stringify(REAL_PREVIEW_MID_CYCLE));
+  flipped.coreInvoice.prepaidCreditsUsed = { val: '1176' };
+  assert.equal(remainingFrom(flipped, null).remaining, 39.94);
+  // More used than held: nothing left, never negative.
+  flipped.coreInvoice.prepaidCreditsUsed = { val: '-9999' };
+  assert.equal(remainingFrom(flipped, null).remaining, 0);
+});
+
 test('what is left comes from the preview alone; the ledger only adds context', () => {
   assert.deepEqual(remainingFrom(REAL_PREVIEW, null), { remaining: 51.7, purchased: null, used: null });
   assert.deepEqual(remainingFrom(REAL_PREVIEW, { total: { val: 'abc' } }), { remaining: 51.7, purchased: null, used: null });
@@ -61,8 +99,11 @@ test('a ledger that says less was bought than is left is not believed', () => {
   assert.deepEqual(r, { remaining: 51.7, purchased: null, used: null });
 });
 
-test('prepaidCreditsUsed is not subtracted: prepaidCredits is already the live figure', () => {
+test('at the start of a cycle nothing has been used yet, so the opening credit is the live figure', () => {
+  // 2 October: prepaidCreditsUsed 0. A missing field reads the same way.
   const p = JSON.parse(JSON.stringify(REAL_PREVIEW));
-  p.coreInvoice.prepaidCreditsUsed = { val: '179' };
+  delete p.coreInvoice.prepaidCreditsUsed;
+  assert.equal(remainingFrom(p, REAL_LEDGER).remaining, 51.7);
+  p.coreInvoice.prepaidCreditsUsed = { val: '' };
   assert.equal(remainingFrom(p, REAL_LEDGER).remaining, 51.7);
 });

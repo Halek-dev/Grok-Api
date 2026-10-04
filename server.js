@@ -506,7 +506,9 @@ async function appendUsage(entry) {
   }
 }
 
-async function readUsage() {
+// `since` is an ISO instant: the viewer's own midnight, so "today" means the
+// day where they sit and not the server's. Without it the server's day is used.
+async function readUsage(since) {
   let raw;
   try {
     raw = await fsp.readFile(USAGE_LOG, 'utf8');
@@ -525,8 +527,10 @@ async function readUsage() {
   }
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
+  const from = since && !Number.isNaN(Date.parse(since)) ? Date.parse(since) : startOfDay.getTime();
   let total = 0;
   let today = 0;
+  let todayRuns = new Set();
   let images = 0;
   // One press of the button can produce several lines, so count distinct runs
   // rather than lines. Lines from before run ids existed each count as one.
@@ -538,13 +542,14 @@ async function readUsage() {
     images += typeof r.images === 'number' ? r.images : 0;
     if (r.runId) runIds.add(r.runId); else unGrouped++;
     const t = Date.parse(r.timestamp);
-    if (!Number.isNaN(t) && t >= startOfDay.getTime()) today += cost;
+    if (!Number.isNaN(t) && t >= from) { today += cost; todayRuns.add(r.runId || r.timestamp); }
   }
   return {
     runs: runIds.size + unGrouped,
     images: images,
     total: Math.round(total * 1e6) / 1e6,
     today: Math.round(today * 1e6) / 1e6,
+    todayRuns: todayRuns.size,
     recent: rows.slice(-25).reverse()
   };
 }
@@ -1501,7 +1506,9 @@ const server = http.createServer(async function (req, res) {
 
       if (urlPath === '/api/usage') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/usage.');
-        return sendJson(res, 200, await readUsage());
+        let since = null;
+        try { since = new URL(req.url, 'http://x').searchParams.get('since'); } catch { /* none */ }
+        return sendJson(res, 200, await readUsage(since));
       }
 
       // Delete one saved image. The usage log line stays: the money was spent

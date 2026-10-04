@@ -36,7 +36,6 @@
   var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   var ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
   var STORE_KEY = 'imagine-studio/settings';
-  var SPEND_KEY = 'imagine-studio/spend';
   var PASS_KEY = 'imagine-studio/password';
   var THEME_KEY = 'imagine-studio/theme';
   var ACCENT_KEY = 'imagine-studio/accent';
@@ -316,26 +315,31 @@
   }
 
   // -------------------------------------------------------------------------
-  // Spend — this browser's runs today, reset at local midnight.
+  // Spend — what the whole team has spent today, from the server's log, with
+  // "today" being the viewer's own day. It used to be this browser's runs
+  // alone, which read $0.00 on any machine that was watching rather than
+  // making — and looked broken.
   // -------------------------------------------------------------------------
-  function todayStamp() {
-    var d = new Date();
-    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-  }
-
-  function loadSpend() {
-    var s = readStore(SPEND_KEY);
-    if (!s || s.date !== todayStamp()) return { date: todayStamp(), amount: 0, runs: 0 };
-    return s;
-  }
-
-  var spend = loadSpend();
+  var spend = { amount: 0, runs: 0 };
 
   function renderSpend() {
-    spend = spend.date === todayStamp() ? spend : { date: todayStamp(), amount: 0, runs: 0 };
     spendAmount.textContent = money(spend.amount);
     spendRuns.hidden = !(spend.runs > 0);
     if (spend.runs > 0) spendRuns.textContent = '· ' + spend.runs + (spend.runs === 1 ? ' run' : ' runs');
+  }
+
+  async function refreshSpend() {
+    if (!config || app.hidden) return;
+    var midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    try {
+      var res = await fetch('/api/usage?since=' + encodeURIComponent(midnight.toISOString()), { headers: authHeaders({}) });
+      if (!res.ok) return;
+      var u = await res.json();
+      if (typeof u.today !== 'number') return;
+      spend = { amount: u.today, runs: u.todayRuns || 0 };
+      renderSpend();
+    } catch (err) { /* the last figure stands */ }
   }
 
   // What is left of the prepaid credit, read by the server from xAI's
@@ -365,12 +369,12 @@
     }
   }
 
-  // Spend increments only when an image arrives, never on a failure.
+  // Spend climbs the moment an image arrives, never on a failure; the server's
+  // figure replaces this estimate when the run ends.
   function addSpend(amount, isNewRun) {
     if (typeof amount !== 'number' || !isFinite(amount)) return;
     spend.amount = Math.round((spend.amount + amount) * 1e6) / 1e6;
     if (isNewRun) spend.runs += 1;
-    writeStore(SPEND_KEY, spend);
     renderSpend();
   }
 
@@ -2922,6 +2926,7 @@
       paintTitle(null);
       notifyFinished(run);
       refreshBalance();
+      refreshSpend();
       if (runTimer && !runs.some(function (r) { return r.status === 'running'; })) {
         clearInterval(runTimer);
         runTimer = null;
@@ -4091,7 +4096,7 @@
     if (!config) return;
     buildModelOptions();
     renderRetirement();
-    renderSpend();
+    refreshSpend();
     refreshBalance();
   });
 
@@ -4175,6 +4180,7 @@
     promptEl.focus();
     loadProjects().then(function () { if (pendingSlug === null) renderProjectPill(); });
     loadSavedRuns();
+    refreshSpend();
     refreshBalance();
     checkNews();
     // The server knows when its disk is replaced on every deploy. Say so here,
