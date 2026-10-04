@@ -2,8 +2,9 @@
   {
     "id": "2026-10-04",
     "date": "4 October 2026",
-    "title": "Projects",
+    "title": "Projects, and the older pictures are back",
     "items": [
+      { "title": "Older pictures are back", "body": "The gallery had been stopping early: once enough recent runs were deleted, it took a short first page for the end of the history and never loaded the rest. Nothing was lost — scroll down and it is all there." },
       { "title": "Folders to work inside", "body": "Pick a project from the switcher at the top left, or make one there. Everything you generate lands in it, and the gallery, Library and Prompts show only its things. Unsorted holds everything made outside a project." },
       { "title": "Its own reference photos", "body": "Keep the photos a project reuses in the tray above the box. One click attaches one. Add from the + or from an attached photo's menu — Keep with this project." },
       { "title": "Opens with the right settings", "body": "On the project card, Use current settings as its defaults. Opening the project, or arriving by its link, puts them on the pills." },

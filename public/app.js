@@ -1762,9 +1762,11 @@
     try {
       var res = await fetch('/api/runs?limit=' + PAGE + '&before=' + encodeURIComponent(oldestStamp) + projectQuery(), { headers: authHeaders({}) });
       if (!res.ok) { historyDone = true; return; }
-      var list = (await res.json()).runs || [];
+      var page = await res.json();
+      var list = page.runs || [];
       takeRestored(list);
-      if (list.length < PAGE) historyDone = true;
+      // The server says whether there is more; a short page alone proves nothing.
+      if (page.more === false || (page.more === undefined && list.length < PAGE)) historyDone = true;
     } catch (err) {
       historyDone = true;
     } finally {
@@ -4193,8 +4195,9 @@
     try {
       var res = await fetch('/api/runs?limit=' + PAGE + projectQuery(), { headers: authHeaders({}) });
       if (!res.ok) return;
-      var list = (await res.json()).runs || [];
-      historyDone = list.length < PAGE;
+      var page = await res.json();
+      var list = page.runs || [];
+      historyDone = page.more === false || (page.more === undefined && list.length < PAGE);
       // Anything made in this tab stays on top of what was restored.
       takeRestored(list);
     } catch (err) {

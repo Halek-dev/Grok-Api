@@ -751,6 +751,19 @@ this. Switch model, or wait a few minutes. If it never recovers — see the next
 section for how to tell — then it is real: check the model still exists in the
 xAI console and that the key on the server can use it.
 
+**The gallery stops at a certain time of day and older pictures are "gone"**
+First check the volume's usage in Railway: if it holds more than the handful
+of pictures on the page, nothing was lost. Until 4 October 2026 a page of the
+gallery was cut from the newest forty runs in the log *before* deleted runs
+were dropped from it; once enough of the newest runs had been deleted, the
+first page came back short, the browser read "short" as "the end of history"
+and never asked for more. The pictures sat on the disk the whole time. A page
+is now cut after the dead runs are dropped, and the server says outright
+whether more exist. Deploying the fix brings everything back; no data was
+touched. Pictures really are deleted only by Delete (ten minutes of undo) or by
+`MAX_STORED_IMAGES` pruning, and the latter keeps a count, so a gallery of
+twenty with a cap of 150 is never pruning.
+
 **Railway says "Deployment crashed" after every redeploy**
 If the deploy log ends with `Stopping Container` and `npm error signal SIGTERM`,
 nothing crashed: Railway stopped the old container to start the new one, the

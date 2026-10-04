@@ -843,24 +843,32 @@ async function readRuns(limit, favouritesOnly, before, view) {
     }
   }
 
+  // Drop anything whose file has since been deleted or pruned, so the client
+  // is never sent an id that will 404. This comes BEFORE the page is cut: a
+  // page is a page of pictures that exist. Cutting first and dropping after
+  // once sent back a short page whenever the newest runs had been deleted,
+  // and the browser read "short" as "the end" — pictures months old sat on
+  // the disk with no way to reach them. One directory listing serves every
+  // run; the log can be long.
+  let onDisk;
+  try {
+    onDisk = new Set(await fsp.readdir(IMAGE_DIR));
+  } catch {
+    onDisk = new Set();
+  }
   let runs = order.map((k) => byRun.get(k)).reverse();
+  for (const run of runs) run.images = run.images.filter((img) => onDisk.has(img.id));
+  runs = runs.filter((run) => run.images.length);
   // The library: every run that still has a favourite in it, however old.
   if (favouritesOnly) runs = runs.filter((run) => run.images.some((img) => img.favourite));
   // Paging for the endless gallery: only runs older than the last one shown.
   if (before) runs = runs.filter((run) => run.timestamp < before);
+  const more = runs.length > limit;
   runs = runs.slice(0, limit);
 
-  // Drop anything whose file has since been pruned, so the client is never sent
-  // an id that will 404.
   const alive = [];
   for (const run of runs) {
-    const kept = [];
-    for (const img of run.images) {
-      try {
-        await fsp.access(path.join(IMAGE_DIR, img.id));
-        kept.push(img);
-      } catch { /* pruned */ }
-    }
+    const kept = run.images;
     // The photos this edit was made from. Combined: every line carries the same
     // list, so the first is the list. Edited apart: one photo per line, in
     // frame order. Offered only if every one of them is still on disk — a
@@ -879,12 +887,12 @@ async function readRuns(limit, favouritesOnly, before, view) {
     }
     run.sourceFiles = complete ? ids : [];
 
-    if (kept.length) {
-      run.images = kept.sort((a, b) => a.frame - b.frame);
-      alive.push(run);
-    }
+    run.images = kept.sort((a, b) => a.frame - b.frame);
+    alive.push(run);
   }
-  return alive;
+  // `more` says whether another page exists, so the browser never has to guess
+  // from the length of this one.
+  return { runs: alive, more: more };
 }
 
 // ---------------------------------------------------------------------------
@@ -1592,7 +1600,8 @@ const server = http.createServer(async function (req, res) {
           const q = params.get('limit');
           if (q) limit = Math.min(favouritesOnly ? 500 : 100, Math.max(1, parseInt(q, 10) || 20));
         } catch { /* keep the default */ }
-        return sendJson(res, 200, { runs: await readRuns(limit, favouritesOnly, before, view), saving: true });
+        const page = await readRuns(limit, favouritesOnly, before, view);
+        return sendJson(res, 200, { runs: page.runs, more: page.more, saving: true });
       }
 
       // The prompt library: list, favourite, delete, and put back.
@@ -1786,7 +1795,9 @@ server.on('error', function (err) {
 
 server.listen(PORT, HOST, function () {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  console.log(STUDIO_NAME + ' on http://' + shown + ':' + PORT);
+  // The port actually bound: with PORT=0 the system picks one.
+  const bound = server.address() && server.address().port || PORT;
+  console.log(STUDIO_NAME + ' on http://' + shown + ':' + bound);
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
