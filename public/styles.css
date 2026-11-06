@@ -1462,6 +1462,11 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
    Narrow screens
    ========================================================================== */
 
+/* Mid widths: the run count is the first thing the bar can do without. */
+@media (max-width: 1000px) {
+  .topbar__spend-runs { display: none; }
+}
+
 @media (max-width: 760px) {
   .topbar { padding: 0 12px; gap: 8px; }
   /* The project switcher takes the brand's place: a folder, lit when a

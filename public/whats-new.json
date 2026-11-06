@@ -1,5 +1,16 @@
 [
   {
+    "id": "2026-11-05",
+    "date": "5 November 2026",
+    "title": "A second engine: Nano Banana Pro",
+    "items": [
+      { "title": "Google's Nano Banana Pro, in the Model list", "body": "Under a Google heading, beside xAI's models, once the server has a Google key with billing on it. Same box, same photos, same Library and Projects — pick it per run, or make it a project's default." },
+      { "title": "It thinks before it draws", "body": "Expect 10–30 seconds a picture; the tile says Thinking. Its price is a floor — the composer says “from $0.13” — because Google bills the thinking on top. The real cost shows with the picture." },
+      { "title": "4K", "body": "Nano Banana Pro offers 4K (about 16 MP) alongside 1K and 2K, for print and crops. 2:1 is xAI-only; switching models falls back to a shape the model can do." },
+      { "title": "Money", "body": "Spent today counts both engines. The “left” figure is still xAI's prepaid credit — Google is pay-as-you-go on a card and has no balance to read." }
+    ]
+  },
+  {
     "id": "2026-10-04",
     "date": "4 October 2026",
     "title": "Projects, and the older pictures are back",

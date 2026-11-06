@@ -197,6 +197,63 @@ type or attach lives there.
 
 All figures USD, per image.
 
+### A second engine: Google's Nano Banana Pro
+
+Set `GOOGLE_API_KEY` (a Google AI Studio key whose Google Cloud project has
+**billing enabled** — this model has no free tier) and *Nano Banana Pro*
+appears in the Model list under a *Google* heading, beside xAI's models. Same
+composer, same photos, same rules: up to five photos, consent for two or more,
+the likeness rule, the same gallery, Library, Prompts and Projects. Pick it per
+run, or make it a project's default.
+
+| Model | Shown as | 1K | 2K | 4K | Per photo on edits |
+|---|---|---|---|---|---|
+| `gemini-3-pro-image` | Nano Banana Pro | $0.134 | $0.134 | $0.24 | $0.0011 |
+
+What is different about it:
+
+- **It thinks before it draws.** Google bills those thinking tokens on top of
+  the picture ($12 per million), so the prices above are a floor — the
+  composer says *from $0.13* and the tile says *Thinking*. The real figure
+  comes back with the picture (Google reports token counts, and the cost is
+  computed from them at $2 / $120 / $12 per million for input, image output
+  and text-or-thinking); the price table is used, and flagged as an estimate,
+  only when it does not.
+- **4K is offered** — about 16 MP — alongside 1K and 2K. The sizes are quoted
+  as budgets, not pixels: Google's exact output sizes are not in the measured
+  table below, which is xAI's.
+- **No 2:1.** Google has no such frame; everything else in the shape list is
+  shared. A shape or size the model cannot do falls back quietly when you
+  switch models.
+- **Photos go as data, not links.** The browser already sends them that way.
+- **Every picture carries Google's SynthID watermark**, invisibly.
+- **There is no "left" figure for Google.** It is pay-as-you-go on the card
+  behind the Google Cloud project, with no balance to read; the top bar's
+  *left* stays xAI's prepaid credit, and *Spent today* counts both engines
+  from the studio's own log (`provider` on each usage line).
+
+> **How far this has been verified, as of 6 November 2026:** to the door. Both
+> of Google's calls accepted the key, the headers and the request shape (no
+> 400) and turned the request away for want of billing — the key was on the
+> free tier, which has no allowance for this model. Those two real refusals are
+> pinned in `test/google.test.js`. What has *not* yet been seen from the live
+> service is a picture coming back: where the bytes sit in the documented
+> call's answer and the exact token fields for the cost. The readers accept
+> every spelling the docs give and fall back to the price table (shown as ≈)
+> if none match, so a mismatch shows as an estimate rather than a failure. Run
+> one real picture once billing is on and pin the response before trusting the
+> cost figure.
+
+Google offers two ways to ask for a picture and both give the same picture: the
+one its documentation now describes (`/v1beta/interactions`) and the older
+`generateContent`. `GOOGLE_API` picks (`interactions` by default,
+`generateContent` the other), so if one misbehaves the switch is a variable,
+not a deploy. Both are in `lib/google.js` and tested against the same
+fixtures. Failures are one `[google-fail]` line each in the deploy log, with
+Google's status string (`RESOURCE_EXHAUSTED`, `PERMISSION_DENIED`…) beside the
+HTTP code; a 429 whose message mentions billing is shown as *Google is not
+billing this key* rather than as a rate limit.
+
 **Imagine 2.0 is the default.** It is the model xAI is keeping: 1.5 Quality
 retires on 2 November 2026 and is served by 2.0 from then on. Anyone who has
 already picked a model keeps their choice; only people who never chose one start
@@ -691,6 +748,9 @@ the shape, size or quality they chose; the line says what xAI objected to.
 | `DATA_DIR` | an attached Railway volume if there is one, else the project folder | Where saved images, favourites and `usage.jsonl` live. Must be on a mounted volume on any host that replaces its disk on deploy. |
 | `SAVE_IMAGES` | `true` | Set `false` to keep results in the browser tab only. |
 | `MAX_STORED_IMAGES` | `400` | Oldest images are pruned past this count. |
+| `GOOGLE_API_KEY` | unset | A Google AI Studio key with billing enabled; offers Nano Banana Pro. |
+| `GOOGLE_API` | `interactions` | Which Google call to make: `interactions` or `generateContent`. |
+| `GOOGLE_BASE_URL` | `https://generativelanguage.googleapis.com` | Only for a stub while testing. |
 | `SHUTDOWN_GRACE_MS` | `8000` | How long requests in flight are given to finish when the server is told to stop. |
 | `STUDIO_NAME` | `Imagine studio` | What the studio calls itself in the top bar, on the password screen and in the browser tab. |
 | `XAI_MANAGEMENT_KEY` | *(none)* | Optional. An xAI **management** key. When set, the top bar shows the prepaid credit that is left. Read-only billing calls; never sent to the browser. |
@@ -840,7 +900,8 @@ not `node ../server.js`.
 
 ```
 server.js              the proxy, key handling, usage log, saved images
-lib/imagine.js         price table, limits, the request builder and cost reading
+lib/imagine.js         price table, limits, the xAI request builder and cost reading
+lib/google.js          the Google (Nano Banana) builders, readers and cost
 lib/projects.js        projects: the folders, where pictures were moved, references
 lib/prompts.js         the prompt library
 lib/balance.js         what is left of the credit, from xAI's billing answers

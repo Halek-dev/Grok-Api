@@ -248,11 +248,12 @@
   };
 
   function sizeLabel(shape, res) {
-    var row = SIZE_TABLE[shape];
+    // The table is xAI's, measured; Google's sizes are quoted as a budget.
+    var row = engineOf(state.model) === 'xai' ? SIZE_TABLE[shape] : null;
     if (row && row[res]) return row[res][0] + '×' + row[res][1];
     // On "auto" the model picks the shape, so the pixels depend on what it
     // chooses. Quote the budget it works to instead of inventing a pair.
-    return res === '2k' ? 'about 4 MP' : 'about 1 MP';
+    return res === '4k' ? 'about 16 MP' : res === '2k' ? 'about 4 MP' : 'about 1 MP';
   }
 
   // Null for "auto": the model chooses the frame.
@@ -268,6 +269,28 @@
   function mode() { return state.sources.length ? 'edit' : 'generate'; }
   function currentShape() { return mode() === 'edit' ? state.editShape : state.shape; }
   function currentResolution() { return mode() === 'edit' ? state.editResolution : state.resolution; }
+
+  // What a model can do: its own shapes and sizes when the server lists them,
+  // xAI's when it does not. Google's Nano Banana Pro offers 4K and no 2:1.
+  var ALL_RESOLUTIONS = ['1k', '2k', '4k'];
+  function modelShapes(model) { var p = priceEntry(model); return p && p.aspectRatios ? p.aspectRatios : SHAPES; }
+  function modelResolutions(model) { var p = priceEntry(model); return p && p.resolutions ? p.resolutions : RESOLUTIONS; }
+  function engineOf(model) { var p = priceEntry(model); return p && p.provider === 'google' ? 'google' : 'xai'; }
+  function engineName(model) { var p = priceEntry(model); return p && p.vendor ? p.vendor : 'xAI'; }
+  function modelThinks(model) { var p = priceEntry(model); return Boolean(p && p.thinks); }
+  function engineHasKey(model) {
+    if (!config) return false;
+    if (engineOf(model) === 'google') return Boolean(config.engines && config.engines.google);
+    return Boolean(config.hasKey);
+  }
+  // A shape or size the new model cannot do falls back, quietly, to one it can.
+  function clampToModel() {
+    var shapes = modelShapes(state.model), sizes = modelResolutions(state.model);
+    if (shapes.indexOf(state.shape) === -1) state.shape = 'auto';
+    if (shapes.indexOf(state.editShape) === -1) state.editShape = 'auto';
+    if (sizes.indexOf(state.resolution) === -1) state.resolution = sizes[0] || '1k';
+    if (sizes.indexOf(state.editResolution) === -1) state.editResolution = sizes[0] || '1k';
+  }
   function currentCount() { return mode() === 'edit' ? state.variants : state.frames; }
   function maxCount() { return mode() === 'edit' ? MAX_EDIT_VARIANTS : MAX_FRAMES; }
   function isReference() { return state.sources.length > 1 && state.plan === 'reference'; }
@@ -466,6 +489,7 @@
 
   function renderPills() {
     var m = mode();
+    clampToModel();
     var p = priceEntry(state.model);
     modelText.textContent = p ? p.label : state.model;
 
@@ -531,28 +555,36 @@
     pillMenu.innerHTML = '';
 
     if (kind === 'model') {
-      pillMenu.appendChild(el('div', 'pillmenu__title', 'Model'));
       var prices = config.prices || {};
       var ids = Object.keys(prices);
-      ids.filter(function (id) { return !modelIsRetired(id); }).concat(ids.filter(modelIsRetired)).forEach(function (id) {
-        var p = prices[id], r = retirementFor(id);
-        var note = r && r.retired ? 'Retired on ' + r.dateLabel
-          : r ? 'Retires in ' + r.days + ' days, on ' + r.dateLabel
-          : p.isDefault ? 'The default — the model xAI is keeping, and the only one that combines photos'
-          : '';
-        var from = per(id, 'auto', res);
-        pillMenu.appendChild(menuRow({
-          label: p.label, note: note, warn: Boolean(r), price: from ? from + ' an image' : '',
-          current: id === state.model, disabled: Boolean(r && r.retired),
-          pick: function () { retiredFallback = null; state.model = id; buildModelOptions(); closeMenu(true); renderRail(); }
-        }));
+      var ordered = ids.filter(function (id) { return !modelIsRetired(id); }).concat(ids.filter(modelIsRetired));
+      // One group per engine, xAI's first, each under its own name.
+      var engines = [];
+      ordered.forEach(function (id) { var e = engineName(id); if (engines.indexOf(e) === -1) engines.push(e); });
+      engines.forEach(function (engine) {
+        pillMenu.appendChild(el('div', 'pillmenu__title', engines.length > 1 ? engine : 'Model'));
+        ordered.filter(function (id) { return engineName(id) === engine; }).forEach(function (id) {
+          var p = prices[id], r = retirementFor(id);
+          var note = r && r.retired ? 'Retired on ' + r.dateLabel
+            : r ? 'Retires in ' + r.days + ' days, on ' + r.dateLabel
+            : p.thinks ? 'Thinks before it draws — slower, sharper, up to 4K. Priced from; the thinking is billed on top'
+            : p.isDefault ? 'The default — the model xAI is keeping, and the only one that combines photos'
+            : '';
+          var r0 = modelResolutions(id).indexOf(res) === -1 ? modelResolutions(id)[0] : res;
+          var from = per(id, 'auto', r0);
+          pillMenu.appendChild(menuRow({
+            label: p.label, note: note, warn: Boolean(r), price: from ? (p.thinks ? 'from ' : '') + from + ' an image' : '',
+            current: id === state.model, disabled: Boolean(r && r.retired),
+            pick: function () { retiredFallback = null; state.model = id; buildModelOptions(); closeMenu(true); renderRail(); }
+          }));
+        });
       });
     }
 
     if (kind === 'shape') {
       pillMenu.appendChild(el('div', 'pillmenu__title', m === 'edit' ? 'Shape of the result' : 'Shape'));
       var grid = el('div', 'pillmenu__grid');
-      SHAPES.forEach(function (s) {
+      modelShapes(state.model).forEach(function (s) {
         var tile = el('button', 'pillmenu__tile');
         tile.type = 'button';
         tile.setAttribute('role', 'option');
@@ -577,11 +609,11 @@
 
     if (kind === 'size') {
       pillMenu.appendChild(el('div', 'pillmenu__title', 'Size'));
-      RESOLUTIONS.forEach(function (r) {
+      modelResolutions(state.model).forEach(function (r) {
         var weak = r === '1k' && isReference();
         pillMenu.appendChild(menuRow({
           label: r.toUpperCase() + ' · ' + sizeLabel(currentShape(), r),
-          note: weak ? 'Kept the least of a likeness in testing' : r === '2k' ? 'Sharper, and holds a face better' : 'Quicker and cheaper — good for exploring',
+          note: weak ? 'Kept the least of a likeness in testing' : r === '4k' ? 'The largest — for print and crops; the slowest and the dearest' : r === '2k' ? 'Sharper, and holds a face better' : 'Quicker and cheaper — good for exploring',
           warn: weak, price: per(state.model, state.quality, r) ? per(state.model, state.quality, r) + ' an image' : '',
           current: r === res,
           pick: function () { if (m === 'edit') state.editResolution = r; else state.resolution = r; closeMenu(true); renderRail(); }
@@ -1160,7 +1192,7 @@
     actionBtn.classList.remove('num');
     // Never a dead grey button without a word of explanation: it stays live and
     // says what is missing when pressed. Only a server with no key disables it.
-    actionBtn.disabled = !config || !config.hasKey;
+    actionBtn.disabled = !engineHasKey(state.model);
     actionBtn.textContent = actionLabel();
   }
 
@@ -1172,9 +1204,11 @@
       costValue.title = 'This model has no price on record.';
       return;
     }
-    costValue.textContent = money(est.total);
+    var floor = modelThinks(state.model);
+    costValue.textContent = (floor ? 'from ' : '') + money(est.total);
     costValue.title = 'Estimated cost: ' + money(est.total) +
-      (est.count > 1 ? ' — ' + est.count + ' × ' + money(est.per) : '') + '. Charged as images arrive.';
+      (est.count > 1 ? ' — ' + est.count + ' × ' + money(est.per) : '') + '. Charged as images arrive.' +
+      (floor ? ' ' + engineName(state.model) + ' bills the model’s thinking on top — usually a few cents a picture. The real figure shows when it arrives.' : '');
     costValue.setAttribute('aria-label', costValue.title);
   }
 
@@ -1284,15 +1318,20 @@
 
   function describeFailure(payload, status) {
     var code = payload && payload.code;
-    var message = (payload && payload.error) || ('xAI returned status ' + status + '.');
+    // Which engine answered — the words below name it rather than assume xAI.
+    var who = payload && payload.engine === 'google' ? 'Google' : 'xAI';
+    var keyName = who === 'Google' ? 'GOOGLE_API_KEY' : 'XAI_API_KEY';
+    var message = (payload && payload.error) || (who + ' returned status ' + status + '.');
 
     if (code === 'no_key') {
-      return ['danger', 'No API key on the server',
-        'Generating is switched off until someone adds the team key to the server environment. Post in #design-ops — nothing you change here will fix it.'];
+      return ['danger', 'No ' + who + ' key on the server',
+        'This model is switched off until someone adds ' + keyName + ' to the server environment. Post in #design-ops — nothing you change here will fix it.'];
     }
     if (code === 'moderation') {
       return ['danger', 'The prompt was blocked, no images returned',
-        'Moderation at xAI rejected this wording, most often over a named person, a brand or violence. Rewrite the subject in plainer terms and run it again. You were not charged.'];
+        who === 'Google'
+          ? 'Google’s safety filter stopped this one, most often over a real person, a brand, or violence. ' + (payload && payload.error ? payload.error + ' ' : '') + 'Rewrite the subject in plainer terms and run it again.'
+          : 'Moderation at xAI rejected this wording, most often over a named person, a brand or violence. Rewrite the subject in plainer terms and run it again. You were not charged.'];
     }
     if (code === 'rate_limited') {
       var wait = payload && payload.retryAfter ? payload.retryAfter : 30;
@@ -1300,12 +1339,15 @@
         'The shared key hit its limit. The button unlocks in ' + wait + ' seconds — someone else on the team may be generating right now. Nothing was charged.'];
     }
     if (code === 'no_credits') {
-      return ['danger', 'The prepaid credits ran out',
-        'The team account has no balance left, so no new runs will start. Ask in #design-ops to top it up. Images already on this page still download.'];
+      return who === 'Google'
+        ? ['danger', 'Google is not billing this key',
+          'Nano Banana Pro has no free tier: the Google Cloud project behind the key needs billing enabled, or its quota is used up. Ask in #design-ops. Nothing was charged.']
+        : ['danger', 'The prepaid credits ran out',
+          'The team account has no balance left, so no new runs will start. Ask in #design-ops to top it up. Images already on this page still download.'];
     }
     if (code === 'key_rejected') {
-      return ['danger', 'xAI rejected the team key',
-        message + ' Someone needs to check XAI_API_KEY on the server. Nothing was charged.'];
+      return ['danger', who + ' rejected the key',
+        message + ' Someone needs to check ' + keyName + ' on the server. Nothing was charged.'];
     }
     if (code === 'timeout') {
       var secs = (payload && payload.seconds) || 180;
@@ -1313,7 +1355,7 @@
         'Nothing came back, so nothing was charged. Large sizes and high frame counts time out most often — retry, or drop the size and the number of frames.'];
     }
     if (code === 'network') {
-      return ['danger', 'Could not reach xAI',
+      return ['danger', 'Could not reach ' + who,
         message + ' This is the server’s connection, not yours. Retry, and if it keeps failing post in #design-ops.'];
     }
     if (code === 'consent_required') {
@@ -1333,16 +1375,16 @@
       var others = Object.keys(prices).filter(function (id) { return id !== failed && !modelIsRetired(id); });
       var pick = others.filter(function (id) { return prices[id].isDefault; })[0] || others[0];
       return ['warning', failedLabel + ' is not answering right now',
-        'xAI turned the request away before making anything, so nothing was charged. This is usually temporary. ' +
+        who + ' turned the request away before making anything, so nothing was charged. This is usually temporary. ' +
         (pick ? 'Switch to ' + prices[pick].label + ' in the Model list, or try again in a few minutes. '
               : 'Try again in a few minutes. ') +
         'Your credits and the team key are fine.'];
     }
     if (code === 'too_large') return ['danger', 'That photo is too large', message];
-    if (code === 'bad_request') return ['danger', 'xAI would not accept that request', message];
+    if (code === 'bad_request') return ['danger', who + ' would not accept that request', message];
     // Unmapped: show the status code and what to do with it. Never "something
     // went wrong".
-    return ['danger', 'xAI returned ' + status, message + ' Retry, then post the code in #design-ops.'];
+    return ['danger', who + ' returned ' + status, message + ' Retry, then post the code in #design-ops.'];
   }
 
   function startRateLimit(seconds) {
@@ -1811,7 +1853,7 @@
         ring.innerHTML = '<svg class="ring" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="12"/><path d="M15 3a12 12 0 0 1 10.4 18"/></svg>';
         ph.appendChild(ring.firstChild);
       }
-      ph.appendChild(el('span', null, running ? 'Rendering' : 'Queued'));
+      ph.appendChild(el('span', null, running ? (modelThinks(run.model) ? 'Thinking' : 'Rendering') : 'Queued'));
       wrap.appendChild(ph);
       return wrap;
     }
@@ -2302,6 +2344,7 @@
     var n = run.sourceCount || (run.sources ? run.sources.length : 0);
     lbMeta.innerHTML = '';
     fact('Model', p ? p.label : run.model);
+    if (config && config.engines && config.engines.google) fact('Engine', engineName(run.model));
     if (run.quality && acceptsQuality(run.model)) fact('Quality', run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     fact('Kind', run.mode !== 'edit' ? 'Generated' : run.plan === 'reference' && n > 1 ? 'Combined from ' + n + ' photos'
       : n > 1 ? 'One of ' + n + ' photos edited' : 'Edit of one photo');
@@ -2746,6 +2789,7 @@
       if (total === 1) return combining ? 'Combining' : 'Applying edit';
       return 'Variant ' + at + ' of ' + total;
     }
+    if (modelThinks(run.model)) return total === 1 ? 'Thinking, then drawing' : 'Frame ' + at + ' of ' + total + ' — thinking';
     return total === 1 ? 'Generating' : 'Frame ' + at + ' of ' + total;
   }
 
@@ -3040,7 +3084,7 @@
 
   rail.addEventListener('submit', function (e) {
     e.preventDefault();
-    if (busy || Date.now() < rateLimitUntil || !config || !config.hasKey) return;
+    if (busy || Date.now() < rateLimitUntil || !engineHasKey(state.model)) return;
     var reason = blockingReason();
     if (reason) {
       // The button is never silently dead: say what is missing, in place.
@@ -3529,7 +3573,7 @@
     var prices = (config && config.prices) || {};
     if (d.model && prices[d.model] && !modelIsRetired(d.model)) { state.model = d.model; retiredFallback = null; buildModelOptions(); }
     if (d.shape && SHAPES.indexOf(d.shape) !== -1) { state.shape = d.shape; state.editShape = d.shape; }
-    if (d.resolution && RESOLUTIONS.indexOf(d.resolution) !== -1) { state.resolution = d.resolution; state.editResolution = d.resolution; }
+    if (d.resolution && ALL_RESOLUTIONS.indexOf(d.resolution) !== -1) { state.resolution = d.resolution; state.editResolution = d.resolution; }
     if (d.quality) state.quality = d.quality;
   }
 
@@ -4275,10 +4319,10 @@
     state.model = saved.model || '';
     state.quality = saved.quality || 'auto';
     state.shape = SHAPES.indexOf(saved.shape) !== -1 ? saved.shape : '9:16';
-    state.resolution = RESOLUTIONS.indexOf(saved.resolution) !== -1 ? saved.resolution : '1k';
+    state.resolution = ALL_RESOLUTIONS.indexOf(saved.resolution) !== -1 ? saved.resolution : '1k';
     state.frames = Math.min(MAX_FRAMES, Math.max(1, Number(saved.frames) || 1));
     state.editShape = SHAPES.indexOf(saved.editShape) !== -1 ? saved.editShape : 'auto';
-    state.editResolution = RESOLUTIONS.indexOf(saved.editResolution) !== -1 ? saved.editResolution : '1k';
+    state.editResolution = ALL_RESOLUTIONS.indexOf(saved.editResolution) !== -1 ? saved.editResolution : '1k';
     state.variants = Math.min(MAX_EDIT_VARIANTS, Math.max(1, Number(saved.variants) || 1));
     state.name = saved.name || '';
     state.filter = saved.filter === 'fav' || saved.filter === 'mine' ? saved.filter : 'all';

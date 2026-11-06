@@ -53,6 +53,7 @@ const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.j
 const { remainingFrom } = require('./lib/balance.js');
 const promptLib = require('./lib/prompts.js');
 const projectLib = require('./lib/projects.js');
+const google = require('./lib/google.js');
 
 // A refused or failed upstream request, written to stderr — on Railway, the
 // deploy log. The usage log records only successes and xAI's console does not
@@ -153,6 +154,24 @@ if (SAVE_IMAGES) {
 // Only override this to route through a gateway, or to point the proxy at a
 // stub while testing. It must speak the same API as api.x.ai.
 const XAI_BASE = String(env('XAI_BASE_URL', 'https://api.x.ai/v1')).replace(/\/+$/, '');
+
+// The second engine: Google's Nano Banana models, with their own key. Without
+// the key those models are simply not offered — nothing else changes.
+const GOOGLE_API_KEY = String(env('GOOGLE_API_KEY', '')).trim();
+const GOOGLE_BASE = String(env('GOOGLE_BASE_URL', 'https://generativelanguage.googleapis.com')).replace(/\/+$/, '');
+// Which of Google's two calls to make: 'interactions' (the documented one) or
+// 'generateContent' (the older one). See lib/google.js.
+const GOOGLE_API = String(env('GOOGLE_API', 'interactions')).trim() === 'generateContent' ? 'generateContent' : 'interactions';
+
+// What the browser is offered: every model whose engine has a key.
+function offeredPrices() {
+  const out = {};
+  Object.keys(PRICES).forEach(function (id) {
+    const provider = imagine.providerOf(id);
+    if (provider === 'google' ? GOOGLE_API_KEY : XAI_API_KEY) out[id] = PRICES[id];
+  });
+  return out;
+}
 
 // Optional. xAI's Management API is a separate service with its own key, and is
 // the only place the remaining prepaid credit can be read. Without the key the
@@ -1050,6 +1069,46 @@ async function callXai(endpoint, payload) {
   return { ok: true, json: json };
 }
 
+// Same contract as callXai, for Google. One place knows the key header, the
+// API revision and Google's error shape.
+async function callGoogle(endpoint, payload, headers) {
+  let response;
+  try {
+    response = await fetch(GOOGLE_BASE + endpoint, {
+      method: 'POST',
+      headers: Object.assign({ 'x-goog-api-key': GOOGLE_API_KEY, 'content-type': 'application/json' }, headers || {}),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    });
+  } catch (err) {
+    const seconds = Math.round(UPSTREAM_TIMEOUT_MS / 1000);
+    const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    const detail = err && err.message ? err.message : 'unknown network error';
+    return {
+      ok: false, networkFailure: true, code: timedOut ? 'timeout' : 'network', status: 504, seconds: seconds,
+      message: timedOut
+        ? 'Google did not answer within ' + seconds + ' seconds, so the request was given up on.'
+        : 'Could not reach Google — the connection failed before it answered (' + detail + ').'
+    };
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    const named = google.classify(response.status, text);
+    return {
+      ok: false, networkFailure: false, status: response.status, code: named.code, message: named.message,
+      retryAfter: retryAfterSeconds(response.headers),
+      trace: Object.assign(named.googleStatus ? { 'google-status': named.googleStatus } : {}, pickTraceHeaders(response.headers))
+    };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { ok: false, networkFailure: false, status: 502, code: 'upstream', message: 'Google answered with a body that is not JSON: ' + text.slice(0, 300) };
+  }
+  return { ok: true, json: json };
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/describe
 //
@@ -1194,10 +1253,6 @@ function frameNumber(sent, index, count) {
 }
 
 async function handleImages(req, res, body) {
-  if (!XAI_API_KEY) {
-    return fail(res, 503, 'No API key on the server. Add XAI_API_KEY to .env and restart.', { code: 'no_key' });
-  }
-
   let input;
   try {
     input = JSON.parse(body || '{}');
@@ -1205,13 +1260,27 @@ async function handleImages(req, res, body) {
     return fail(res, 400, 'The request body was not valid JSON.', { code: 'bad_request' });
   }
 
-  // Which endpoint, the singular `image` or the plural `images`, which settings
-  // are optional, the consent and likeness checks — all decided in
-  // lib/imagine.js, where the tests can see it.
-  const built = imagine.buildImageRequest(input);
+  // Which engine answers for this model. Each has its own key, builder and
+  // call; everything after the call is the same for both.
+  const provider = imagine.providerOf(String(input.model || ''));
+  if (provider === 'google' && !GOOGLE_API_KEY) {
+    return fail(res, 503, 'No Google key on the server. Add GOOGLE_API_KEY to .env and restart.', { code: 'no_key', model: String(input.model || '') });
+  }
+  if (provider !== 'google' && !XAI_API_KEY) {
+    return fail(res, 503, 'No API key on the server. Add XAI_API_KEY to .env and restart.', { code: 'no_key' });
+  }
+
+  // Which endpoint, which settings are optional, the consent and likeness
+  // checks — all decided in lib/imagine.js or lib/google.js, where the tests
+  // can see it.
+  const built = provider === 'google' ? google.buildImageRequest(input, GOOGLE_API) : imagine.buildImageRequest(input);
   if (built.error) {
     return fail(res, built.code === 'likeness_policy' ? 422 : 400, built.error, { code: built.code });
   }
+  const failKind = provider === 'google' ? 'google-fail' : 'xai-fail';
+  const askedResolution = provider === 'google' ? built.resolution : built.payload.resolution;
+  const askedAspect = provider === 'google' ? built.aspect : built.payload.aspect_ratio;
+  const askedN = provider === 'google' ? 1 : built.payload.n;
 
   const mode = built.mode;
   const model = built.model;
@@ -1229,11 +1298,14 @@ async function handleImages(req, res, body) {
 
   // What every log line about this request says about it.
   const about = {
-    user: user, mode: mode, model: model, sources: mode === 'edit' ? built.sources : null,
-    resolution: built.payload.resolution, aspect: built.payload.aspect_ratio, n: built.payload.n
+    kind: failKind, user: user, mode: mode, model: model, sources: mode === 'edit' ? built.sources : null,
+    resolution: askedResolution, aspect: askedAspect, n: askedN
+  };
+  const call = function (payload) {
+    return provider === 'google' ? callGoogle(built.endpoint, payload, built.headers) : callXai(built.endpoint, payload);
   };
 
-  let result = await callXai(built.endpoint, built.payload);
+  let result = await call(built.payload);
   let degraded = false;
 
   // A 400 usually means one optional parameter was not accepted. Retry once with
@@ -1242,13 +1314,13 @@ async function handleImages(req, res, body) {
   // A rejected key produces a 400 too, and retrying that just doubles the wait.
   if (!result.ok && !result.networkFailure && result.status === 400 && result.code !== 'key_rejected') {
     const first = result;
-    const retry = await callXai(built.endpoint, built.minimalPayload);
+    const retry = await call(built.minimalPayload);
     if (retry.ok) {
       result = retry;
       degraded = true;
       // The person got their image, but not with the settings they chose. Say
-      // what xAI objected to, or a setting that is always refused goes unnoticed.
-      logFailure(Object.assign({}, about, { kind: 'xai-retry', status: first.status, code: first.code,
+      // what was objected to, or a setting that is always refused goes unnoticed.
+      logFailure(Object.assign({}, about, { kind: failKind.replace('fail', 'retry'), status: first.status, code: first.code,
         message: 'rescued by retrying without optional settings; first answer: ' + first.message, trace: first.trace }));
     }
   }
@@ -1259,6 +1331,7 @@ async function handleImages(req, res, body) {
       code: result.code, message: result.message, trace: result.trace }));
     return fail(res, status, result.message, {
       code: result.code,
+      engine: provider,
       // So the page can name the model that is not answering and offer another.
       model: model,
       upstreamStatus: result.networkFailure ? null : result.status,
@@ -1267,56 +1340,76 @@ async function handleImages(req, res, body) {
     });
   }
 
-  const data = Array.isArray(result.json && result.json.data) ? result.json.data : [];
+  let images;
+  if (provider === 'google') {
+    // Google answers with the picture inside its content, and sometimes a
+    // sentence with it. No picture is a refusal, and the reason is named.
+    const read = google.imagesFromResponse(result.json, built.style);
+    if (!read.images.length) {
+      const why = read.blocked || (read.text ? 'text only' : 'no image in the answer');
+      logFailure(Object.assign({}, about, { status: 200, code: 'moderation', message: 'success with no picture in it: ' + why + (read.text ? ' — ' + read.text.slice(0, 160) : '') }));
+      return fail(res, 422,
+        read.text
+          ? 'Google answered without a picture: “' + read.text.slice(0, 200) + '”'
+          : 'Google accepted the request but returned no picture (' + why + '), which usually means its safety filter stopped this prompt.',
+        { code: 'moderation', engine: 'google' });
+    }
+    images = read.images.map(function (img) { return { b64: img.b64, url: null, revised_prompt: null, id: null }; });
+  } else {
+    const data = Array.isArray(result.json && result.json.data) ? result.json.data : [];
 
-  // A success with no data means moderation filtered the prompt. Say so — do not
-  // return an empty success and let the page look broken.
-  if (data.length === 0) {
-    logFailure(Object.assign({}, about, { status: 200, code: 'moderation', message: 'success with no images in it' }));
-    return fail(res, 422,
-      'xAI accepted the request but returned no images, which means moderation filtered this prompt.',
-      { code: 'moderation' });
-  }
+    // A success with no data means moderation filtered the prompt. Say so — do
+    // not return an empty success and let the page look broken.
+    if (data.length === 0) {
+      logFailure(Object.assign({}, about, { status: 200, code: 'moderation', message: 'success with no images in it' }));
+      return fail(res, 422,
+        'xAI accepted the request but returned no images, which means moderation filtered this prompt.',
+        { code: 'moderation' });
+    }
 
-  // Handle both response shapes on the way back, even though b64_json was asked
-  // for: the hosted URLs are temporary, so a URL-based flow silently rots.
-  const images = data.map(function (item) {
-    return {
-      b64: typeof item.b64_json === 'string' ? item.b64_json : null,
-      url: typeof item.url === 'string' ? item.url : null,
-      // The edits endpoint sends revised_prompt back empty, so it is never read
-      // on that path — the instruction the person typed is the truthful caption.
-      revised_prompt: mode !== 'edit' && typeof item.revised_prompt === 'string' && item.revised_prompt
-        ? item.revised_prompt : null,
-      id: null
-    };
-  }).filter(function (img) {
-    return img.b64 || img.url;
-  });
+    // Handle both response shapes on the way back, even though b64_json was
+    // asked for: the hosted URLs are temporary, so a URL-based flow silently rots.
+    images = data.map(function (item) {
+      return {
+        b64: typeof item.b64_json === 'string' ? item.b64_json : null,
+        url: typeof item.url === 'string' ? item.url : null,
+        // The edits endpoint sends revised_prompt back empty, so it is never read
+        // on that path — the instruction the person typed is the truthful caption.
+        revised_prompt: mode !== 'edit' && typeof item.revised_prompt === 'string' && item.revised_prompt
+          ? item.revised_prompt : null,
+        id: null
+      };
+    }).filter(function (img) {
+      return img.b64 || img.url;
+    });
 
-  if (images.length === 0) {
-    logFailure(Object.assign({}, about, { status: 200, code: 'upstream', message: 'image records with neither b64_json nor url' }));
-    return fail(res, 502, 'xAI returned image records with neither b64_json nor url in them.', { code: 'upstream' });
+    if (images.length === 0) {
+      logFailure(Object.assign({}, about, { status: 200, code: 'upstream', message: 'image records with neither b64_json nor url' }));
+      return fail(res, 502, 'xAI returned image records with neither b64_json nor url in them.', { code: 'upstream' });
+    }
   }
 
   // The minimal retry sends no aspect_ratio, resolution, n or quality, so those
   // revert to the API defaults. Log what actually applied, not what was asked
   // for, or a degraded 2k run is recorded at a size it never got.
   const effectiveQuality = degraded ? 'auto' : built.quality;
-  const effectiveResolution = degraded ? '1k' : built.payload.resolution;
-  const effectiveAspect = degraded ? 'auto' : built.payload.aspect_ratio;
+  const effectiveResolution = degraded ? '1k' : askedResolution;
+  const effectiveAspect = degraded ? 'auto' : askedAspect;
 
-  // What it cost. xAI's own figure whenever the response carries one; the price
-  // table only when it does not, and then flagged as an estimate so the running
-  // total never presents a guess as a bill.
-  const billed = imagine.costFromResponse(result.json, {
+  // What it cost. The engine's own figure whenever the response carries one;
+  // the price table only when it does not, and then flagged as an estimate so
+  // the running total never presents a guess as a bill.
+  const fallback = {
     model: model,
     quality: effectiveQuality,
     resolution: effectiveResolution,
     mode: mode,
     count: images.length,
     sources: built.sources
-  });
+  };
+  const billed = provider === 'google'
+    ? google.costFromResponse(result.json, built.style, fallback)
+    : imagine.costFromResponse(result.json, fallback);
   const cost = billed.cost;
 
   // Save the bytes before answering, so a refresh can bring the run back. A
@@ -1337,7 +1430,8 @@ async function handleImages(req, res, body) {
   // is logged and never fails the request.
   let sourceFiles = null;
   if (mode === 'edit' && saved.length) {
-    const urls = built.payload.images ? built.payload.images.map(function (i) { return i.url; })
+    const urls = provider === 'google' ? built.sourceUris
+      : built.payload.images ? built.payload.images.map(function (i) { return i.url; })
       : built.payload.image ? [built.payload.image.url] : [];
     const ids = [];
     for (const u of urls) ids.push(await saveSource(u));
@@ -1360,6 +1454,7 @@ async function handleImages(req, res, body) {
     user: user || null,
     mode: mode,
     model: model,
+    provider: provider,
     quality: built.acceptsQuality ? effectiveQuality : null,
     resolution: effectiveResolution,
     aspect_ratio: effectiveAspect,
@@ -1454,7 +1549,9 @@ const server = http.createServer(async function (req, res) {
         studioName: STUDIO_NAME,
         hasKey: Boolean(XAI_API_KEY),
         requiresPassword: Boolean(TEAM_PASSWORD),
-        prices: PRICES,
+        // Which engines have a key. A model is offered only when its engine has.
+        engines: { xai: Boolean(XAI_API_KEY), google: Boolean(GOOGLE_API_KEY) },
+        prices: offeredPrices(),
         qualityModels: QUALITY_MODELS,
         maxEditSources: imagine.MAX_EDIT_SOURCES,
         maxEditVariants: imagine.MAX_EDIT_VARIANTS,
@@ -1806,11 +1903,12 @@ server.listen(PORT, HOST, function () {
   const bound = server.address() && server.address().port || PORT;
   console.log(STUDIO_NAME + ' on http://' + shown + ':' + bound);
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
+  console.log('  Google key        ' + (GOOGLE_API_KEY ? 'loaded — Nano Banana Pro offered, via ' + GOOGLE_API : 'not set (Nano Banana Pro is not offered)'));
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Credit balance    ' + (XAI_MANAGEMENT_KEY ? 'shown (management key loaded)' : 'not shown — set XAI_MANAGEMENT_KEY to show what is left'));
   console.log('  Usage log         ' + USAGE_LOG);
-  console.log('  Failures          one [xai-fail] line each, here on stderr');
+  console.log('  Failures          one [xai-fail] or [google-fail] line each, here on stderr');
   console.log('  Saved images      ' + (!SAVE_IMAGES ? 'off (SAVE_IMAGES=false)'
     : STORAGE_READY ? IMAGE_DIR + '  (keeping ' + MAX_STORED_IMAGES + ')'
     : 'NOT WRITABLE — ' + IMAGE_DIR + '  (' + STORAGE_PROBLEM + ')'));
