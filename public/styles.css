@@ -401,6 +401,11 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .pcardx__facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; color: var(--muted); margin-bottom: 10px; }
 .pcardx__facts b { color: var(--text); font-weight: 500; }
 .pcardx__acts { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+/* How much of the budget is gone. */
+.pcardx__bar { height: 4px; margin: -4px 0 10px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
+.pcardx__bar i { display: block; height: 100%; background: var(--structure); border-radius: 2px; }
+.pcardx__bar.is-warning i { background: var(--warning); }
+.pcardx__bar.is-danger i { background: var(--danger); }
 .pcardx__note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
 /* Reference tray above the composer. */
@@ -605,6 +610,15 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   transition: opacity 360ms ease-out, transform 360ms ease-out;
 }
 .frame__button img.is-in { opacity: 1; transform: none; }
+
+/* Which engine made this one, on a run that went to two. */
+.frame__engine {
+  position: absolute; left: 8px; bottom: 8px;
+  padding: 3px 8px; border-radius: var(--r-pill);
+  background: var(--scrim); color: #fff;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.01em;
+  pointer-events: none;
+}
 
 .frame__select, .frame__fav {
   position: absolute;
@@ -1000,6 +1014,7 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .pillmenu__tile .ratio { border-color: currentColor; }
 
 .pill.is-warning { border-color: var(--warning-hairline); color: var(--warning); }
+.pill.is-danger { border-color: var(--danger); color: var(--danger); }
 
 /* The little rectangle drawn to the chosen ratio. */
 .ratio {

@@ -859,7 +859,7 @@ async function readRuns(limit, favouritesOnly, before, view) {
         // the view is applied per picture, not per run.
         const at = projectLib.placeOf(store, f.id, r.project);
         if (!projectLib.inView(view, at)) continue;
-        run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id), project: at });
+        run.images.push({ id: f.id, frame: f.frame || run.images.length + 1, favourite: favourites.has(f.id), project: at, model: r.model || null });
       }
     }
     if (Array.isArray(r.sourceFiles)) {
@@ -1304,6 +1304,26 @@ async function handleImages(req, res, body) {
   const call = function (payload) {
     return provider === 'google' ? callGoogle(built.endpoint, payload, built.headers) : callXai(built.endpoint, payload);
   };
+
+  // A project with a budget refuses a picture that would take it past the
+  // line. The check is per request, so a run of several frames in flight at
+  // once can overshoot by a frame or two; the page refuses a whole run it can
+  // see will not fit, so that only happens in a race.
+  if (project) {
+    const pj = (await describeProjects()).projects.find((q) => q.id === project);
+    if (pj && pj.budget) {
+      const est = provider === 'google'
+        ? google.estimateCost({ model: model, resolution: built.resolution, mode: mode, count: 1, sources: built.sources })
+        : imagine.estimateCost({ model: model, quality: built.quality, resolution: built.payload.resolution, mode: mode, count: 1, sources: built.sources });
+      const spent = pj.spent || 0;
+      if (spent + (est || 0) > pj.budget + 1e-9) {
+        logFailure(Object.assign({}, about, { status: null, code: 'budget_reached', message: '"' + pj.name + '" at $' + spent.toFixed(2) + ' of its $' + pj.budget.toFixed(2) }));
+        return fail(res, 402,
+          'This picture would take “' + pj.name + '” past its budget of $' + pj.budget.toFixed(2) + ' — $' + spent.toFixed(2) + ' is already spent. Nothing was charged.',
+          { code: 'budget_reached', project: project, budget: pj.budget, spent: Math.round(spent * 100) / 100 });
+      }
+    }
+  }
 
   let result = await call(built.payload);
   let degraded = false;
@@ -1757,6 +1777,7 @@ const server = http.createServer(async function (req, res) {
             case 'rename': return projectLib.rename(store, body.id, body.name);
             case 'archive': return projectLib.setArchived(store, body.id, body.archived !== false);
             case 'defaults': return projectLib.setDefaults(store, body.id, body.defaults);
+            case 'budget': return projectLib.setBudget(store, body.id, body.budget);
             case 'delete': return projectLib.remove(store, body.id);
             case 'move': return projectLib.move(store, body.ids, body.to === projectLib.UNSORTED ? projectLib.UNSORTED : body.to);
             case 'reference-add': return projectLib.addReference(store, body.id, refId);

@@ -250,3 +250,23 @@ test('client body for edit-each becomes a singular image payload upstream', () =
   assert.deepEqual(up.payload.image, { type: 'image_url', url: 'ref-b' });
   assert.equal('images' in up.payload, false);
 });
+
+test('a frame carries its own model and size on a run made on two engines; a frame that says nothing takes the run\'s', () => {
+  const both = run({
+    mode: 'generate', model: M20, resolution: '4k', sources: [],
+    frames: [
+      { model: M20, resolution: '2k' },
+      { model: 'gemini-3-pro-image', resolution: '4k' },
+      {}
+    ]
+  });
+  assert.equal(client.buildFrameBody(both, 0, {}).model, M20);
+  assert.equal(client.buildFrameBody(both, 0, {}).resolution, '2k');
+  assert.equal(client.buildFrameBody(both, 1, {}).model, 'gemini-3-pro-image');
+  assert.equal(client.buildFrameBody(both, 1, {}).resolution, '4k');
+  assert.equal(client.buildFrameBody(both, 2, {}).model, M20);
+  assert.equal(client.buildFrameBody(both, 2, {}).resolution, '4k');
+  assert.equal(client.buildFrameBody(both, 2, {}).frame, 3);
+  // A run with no frames array at all is the old shape and still works.
+  assert.equal(client.buildFrameBody(run({ frames: undefined }), 0, {}).model, M20);
+});

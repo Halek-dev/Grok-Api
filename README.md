@@ -246,6 +246,15 @@ What is different about it:
 > counts and the cost the studio would record, and says OK or ATTENTION. Pin
 > the response in the tests before trusting the cost figure.
 
+**Run on both engines.** With both keys on the server, the Model list ends
+with *Run on both engines*. Switched on, every frame is made twice — once by
+the model picked, once by the other engine's default — and the frames
+alternate so each pair lands together, each tile labelled with its model.
+Twice the frames, both prices added up in the estimate; a size one engine
+cannot do (4K on xAI) falls to the largest it has for that frame only, and the
+usage log records each picture under the model that made it, so a restored run
+keeps its labels. *Run again* repeats the pair.
+
 Google offers two ways to ask for a picture and both give the same picture: the
 one its documentation now describes (`/v1beta/interactions`) and the older
 `generateContent`. `GOOGLE_API` picks (`interactions` by default,
@@ -643,6 +652,18 @@ above the box — one click attaches one. The address carries the project
   — puts them on the pills.
 - Up to 24 reference photos per project, kept in `DATA_DIR/sources` like any
   attached photo and never cleared while the project holds them.
+
+**Budgets.** A project can carry a ceiling on what it may spend: *Set a
+budget* on the project card, in dollars. From then on the card shows *$12.40
+of $50* with a bar, the project pill turns amber at 80% and red when the
+budget is reached, the line under the composer says how much is left, and a
+run that would not fit is refused before anything is sent — the page checks
+the whole run, the server checks every picture (`402 budget_reached`, one
+`[xai-fail]`/`[google-fail]` line in the log). Spend counts what was *made*
+in the project, both engines; moving pictures does not move money. Several
+frames in flight at once can overshoot by a frame or two, since each is
+checked as it goes. Remove the budget and the ceiling is gone. Unsorted has
+none.
 
 One level, no nesting, team-wide — there are no accounts, so a project is not
 someone's; it is the team's. Stored in `DATA_DIR/projects.json` (gitignored):

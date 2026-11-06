@@ -130,6 +130,8 @@
     thumb: 3,          // picture size, 1 (dense) to 5 (large)
     // The project being worked in: null for all, 'unsorted', or a project id.
     project: null,
+    // Every frame made twice, once per engine, side by side.
+    compare: false,
     // [{ dataUri, original, originalSize, name, size, width, height, crop }] in
     // the order they will be sent. dataUri is what goes out — the crop, if any.
     sources: []
@@ -283,6 +285,25 @@
     if (engineOf(model) === 'google') return Boolean(config.engines && config.engines.google);
     return Boolean(config.hasKey);
   }
+  // The other engine's model, for a run on both: its default, else its first
+  // live model with a key. Null when there is no second engine to run on.
+  function pairModel() {
+    var prices = (config && config.prices) || {};
+    var mine = engineOf(state.model);
+    var ids = Object.keys(prices).filter(function (id) { return engineOf(id) !== mine && !modelIsRetired(id) && engineHasKey(id); });
+    return ids.filter(function (id) { return prices[id].isDefault; })[0] || ids[0] || null;
+  }
+  function runModels() {
+    var pair = state.compare ? pairModel() : null;
+    return pair ? [state.model, pair] : [state.model];
+  }
+  // The size a model will be asked for: the chosen one, or the largest it has.
+  function sizeFor(model) {
+    var sizes = modelResolutions(model), want = currentResolution();
+    return sizes.indexOf(want) !== -1 ? want : sizes[sizes.length - 1];
+  }
+  function modelLabel(model) { var p = priceEntry(model); return p ? p.label : model; }
+
   // A shape or size the new model cannot do falls back, quietly, to one it can.
   function clampToModel() {
     var shapes = modelShapes(state.model), sizes = modelResolutions(state.model);
@@ -322,11 +343,11 @@
     return typeof v === 'number' ? v : null;
   }
 
-  function estimate() {
+  function estimateFor(model) {
     var m = mode();
-    var per = perImage(state.model, state.quality, currentResolution(), m);
+    var per = perImage(model, state.quality, sizeFor(model), m);
     if (per == null) return null;
-    var p = priceEntry(state.model);
+    var p = priceEntry(model);
     var input = p && typeof p.input === 'number' ? p.input : 0;
     if (m !== 'edit') return { total: per * state.frames, per: per, count: state.frames };
     var sources = Math.max(1, state.sources.length);
@@ -335,6 +356,15 @@
     // One request per variant, and every request re-sends every source image.
     var perRequest = per + input * sources;
     return { total: perRequest * state.variants, per: perRequest, count: state.variants };
+  }
+
+  // The whole run: every model it will go to, added up.
+  function estimate() {
+    var parts = runModels().map(estimateFor);
+    if (parts.some(function (x) { return !x; })) return null;
+    var total = parts.reduce(function (s, x) { return s + x.total; }, 0);
+    var count = parts.reduce(function (s, x) { return s + x.count; }, 0);
+    return { total: Math.round(total * 1e6) / 1e6, per: count ? total / count : 0, count: count };
   }
 
   // -------------------------------------------------------------------------
@@ -491,7 +521,8 @@
     var m = mode();
     clampToModel();
     var p = priceEntry(state.model);
-    modelText.textContent = p ? p.label : state.model;
+    var pair = state.compare ? pairModel() : null;
+    modelText.textContent = (p ? p.label : state.model) + (pair ? ' + ' + modelLabel(pair) : '');
 
     // On an edit, auto means the shape of the first photo — say so, because
     // that is the one case where "auto" is a specific answer.
@@ -525,7 +556,7 @@
     framesMinus.setAttribute('aria-label', 'Fewer ' + word + 's');
     framesPlus.setAttribute('aria-label', 'More ' + word + 's');
 
-    summaryEl.textContent = (p ? p.label : state.model) + ' · ' + (shape === 'auto' ? 'Auto' : shape) + ' · ' + res.toUpperCase();
+    summaryEl.textContent = (p ? p.label : state.model) + (pair ? ' + ' + modelLabel(pair) : '') + ' · ' + (shape === 'auto' ? 'Auto' : shape) + ' · ' + res.toUpperCase();
   }
 
   // -------------------------------------------------------------------------
@@ -579,6 +610,17 @@
           }));
         });
       });
+      // With two engines on the server, every frame can be made on both.
+      var other = (function () { var keep = state.compare; state.compare = true; var x = pairModel(); state.compare = keep; return x; })();
+      if (other) {
+        pillMenu.appendChild(el('div', 'pillmenu__rule'));
+        pillMenu.appendChild(menuRow({
+          label: 'Run on both engines',
+          note: 'Every frame made twice — by ' + modelLabel(state.model) + ' and by ' + modelLabel(other) + ' — side by side, each labelled. Twice the frames, both prices.',
+          current: state.compare,
+          pick: function () { state.compare = !state.compare; closeMenu(true); renderRail(); persist(); }
+        }));
+      }
     }
 
     if (kind === 'shape') {
@@ -1144,6 +1186,15 @@
         : 'Describe the image first. Nothing is charged until you generate.';
     }
     if (wordCount(promptEl.value) < 3) return 'A prompt needs at least three words.';
+    // A project's budget is checked here, before anything is sent, for the
+    // whole run; the server checks again per picture.
+    var bp = currentProject();
+    if (bp && bp.budget) {
+      var left = Math.round((bp.budget - (bp.spent || 0)) * 100) / 100;
+      var est = estimate();
+      if (left <= 0) return bp.name + ' has reached its budget of ' + money(bp.budget) + '. Raise it on the project card, or work in another project.';
+      if (est && est.total > left + 1e-9) return 'This run (' + money(est.total) + ') would take ' + bp.name + ' past its budget — ' + money(left) + ' left. Fewer frames, a smaller size, or raise the budget.';
+    }
     return null;
   }
 
@@ -1151,6 +1202,11 @@
     var text, tone = '';
     if (attention) { text = attention; tone = 'is-danger'; }
     else if (busy) text = 'Locked while a run is in flight.';
+    else if (currentProject() && currentProject().budget && (currentProject().spent || 0) / currentProject().budget >= 0.8) {
+      var bq = currentProject();
+      text = bq.name + ' has ' + money(Math.max(0, bq.budget - (bq.spent || 0))) + ' of its ' + money(bq.budget) + ' budget left.';
+      tone = 'is-warning';
+    }
     else if (isReference() && currentResolution() === '1k') {
       text = '1K kept the least of the likeness in testing. 2K costs a little more and holds the face noticeably better.';
       tone = 'is-warning';
@@ -1204,7 +1260,7 @@
       costValue.title = 'This model has no price on record.';
       return;
     }
-    var floor = modelThinks(state.model);
+    var floor = runModels().some(modelThinks);
     costValue.textContent = (floor ? 'from ' : '') + money(est.total);
     costValue.title = 'Estimated cost: ' + money(est.total) +
       (est.count > 1 ? ' — ' + est.count + ' × ' + money(est.per) : '') + '. Charged as images arrive.' +
@@ -1272,7 +1328,8 @@
       model: state.model, quality: state.quality,
       shape: state.shape, resolution: state.resolution, frames: state.frames,
       editShape: state.editShape, editResolution: state.editResolution, variants: state.variants,
-      name: state.name, filter: state.filter, thumb: state.thumb, project: state.project
+      name: state.name, filter: state.filter, thumb: state.thumb, project: state.project,
+      compare: state.compare
     });
   }
 
@@ -1379,6 +1436,10 @@
         (pick ? 'Switch to ' + prices[pick].label + ' in the Model list, or try again in a few minutes. '
               : 'Try again in a few minutes. ') +
         'Your credits and the team key are fine.'];
+    }
+    if (code === 'budget_reached') {
+      return ['danger', 'Project budget reached',
+        message + ' Raise the budget on the project card, or work in another project.'];
     }
     if (code === 'too_large') return ['danger', 'That photo is too large', message];
     if (code === 'bad_request') return ['danger', who + ' would not accept that request', message];
@@ -1905,6 +1966,7 @@
     btn.appendChild(img);
     btn.addEventListener('click', function () { openLightbox(run, image); });
     wrap.appendChild(btn);
+    if (run.models && run.models.length > 1) wrap.appendChild(el('span', 'frame__engine', modelLabel(image.model || frame.model || run.model)));
 
     // Selecting, favouriting and deleting need the server to have kept a copy.
     if (isStored(image)) {
@@ -2222,10 +2284,11 @@
     closeLightbox();
     var sources;
     try { sources = await sourceData(run); } catch (err) { photosGone(); return; }
+    var both = run.models && run.models.length > 1;
     var settings = {
-      mode: run.mode, model: run.model, prompt: run.prompt, quality: run.quality,
+      mode: run.mode, model: run.model, models: both ? run.models : null, prompt: run.prompt, quality: run.quality,
       shape: run.shape, resolution: run.resolution,
-      n: run.frames ? run.frames.length : run.n,
+      n: run.frames ? Math.ceil(run.frames.length / (both ? run.models.length : 1)) : run.n,
       plan: run.plan || 'reference', sources: sources, ratio: run.ratio || null
     };
     var go = function () { submitRun(settings); };
@@ -2339,13 +2402,14 @@
       });
     }
 
-    var p = priceEntry(run.model);
+    var shown = image.model || run.model;
+    var p = priceEntry(shown);
     var made = new Date(run.finishedAt || run.startedAt);
     var n = run.sourceCount || (run.sources ? run.sources.length : 0);
     lbMeta.innerHTML = '';
-    fact('Model', p ? p.label : run.model);
-    if (config && config.engines && config.engines.google) fact('Engine', engineName(run.model));
-    if (run.quality && acceptsQuality(run.model)) fact('Quality', run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
+    fact('Model', p ? p.label : shown);
+    if (config && config.engines && config.engines.google) fact('Engine', engineName(shown));
+    if (run.quality && acceptsQuality(shown)) fact('Quality', run.quality.charAt(0).toUpperCase() + run.quality.slice(1));
     fact('Kind', run.mode !== 'edit' ? 'Generated' : run.plan === 'reference' && n > 1 ? 'Combined from ' + n + ' photos'
       : n > 1 ? 'One of ' + n + ' photos edited' : 'Edit of one photo');
     fact('Size', image.width ? image.width + ' × ' + image.height : (run.resolution || '1k').toUpperCase());
@@ -2720,6 +2784,7 @@
     return {
       mode: mode(),
       model: state.model,
+      models: runModels(),
       prompt: promptEl.value.trim(),
       quality: acceptsQuality(state.model) ? state.quality : null,
       shape: shape,
@@ -2866,7 +2931,8 @@
       width: 0, height: 0,    // filled in from the image itself once it loads
       frame: index + 1,
       favourite: false,
-      revised_prompt: item.revised_prompt || null
+      revised_prompt: item.revised_prompt || null,
+      model: frame.model || run.model
     };
     frame.status = 'done';
 
@@ -2900,15 +2966,24 @@
 
     // Editing each of several photos is one request per photo; everything else
     // — generation, one photo, photos combined — is one per frame asked for.
-    var total = settings.mode === 'edit' && settings.plan === 'each'
+    var perModel = settings.mode === 'edit' && settings.plan === 'each'
       ? Math.max(1, settings.sources.length)
       : Math.max(1, settings.n || 1);
+    // A run on two engines: the frames alternate, so the pair for frame 1
+    // lands together, then the pair for frame 2.
+    var models = Array.isArray(settings.models) && settings.models.length ? settings.models : [settings.model];
+    var total = perModel * models.length;
     var frames = [];
-    for (var i = 0; i < total; i++) frames.push({ status: 'queued', image: null, error: null });
+    for (var i = 0; i < total; i++) {
+      var fm = models[i % models.length];
+      var sizes = modelResolutions(fm);
+      frames.push({ status: 'queued', image: null, error: null, model: fm,
+        resolution: sizes.indexOf(settings.resolution) !== -1 ? settings.resolution : sizes[sizes.length - 1] });
+    }
 
     var run = {
       id: 'run-' + (++seq) + '-' + Date.now().toString(36),
-      mode: settings.mode, model: settings.model, prompt: settings.prompt,
+      mode: settings.mode, model: settings.model, models: models, prompt: settings.prompt,
       quality: settings.quality, shape: settings.shape, resolution: settings.resolution,
       n: total, plan: settings.plan || 'reference', sources: settings.sources || [],
       project: projectId(),
@@ -2971,6 +3046,7 @@
       notifyFinished(run);
       refreshBalance();
       refreshSpend();
+      loadProjects();   // the project's spend, for its budget
       if (runTimer && !runs.some(function (r) { return r.status === 'running'; })) {
         clearInterval(runTimer);
         runTimer = null;
@@ -3541,6 +3617,9 @@
     var p = currentProject();
     projectText.textContent = state.project === 'unsorted' ? 'Unsorted' : p ? p.name : 'All projects';
     projectBtn.classList.toggle('is-on', Boolean(state.project));
+    var frac = p && p.budget ? (p.spent || 0) / p.budget : 0;
+    projectBtn.classList.toggle('is-warning', frac >= 0.8 && frac < 1);
+    projectBtn.classList.toggle('is-danger', frac >= 1);
     projectBtn.title = p ? 'Working in ' + p.name : state.project === 'unsorted' ? 'Pictures made outside any project' : 'Pick a project to work in';
     paintTitle(null);
   }
@@ -3644,21 +3723,31 @@
     projectPop.appendChild(list);
 
     projectPop.appendChild(el('div', 'projects__rule'));
-    if (projectForm === 'new' || projectForm === 'rename') {
+    if (projectForm === 'new' || projectForm === 'rename' || projectForm === 'budget') {
       var p0 = currentProject();
       var form = el('div', 'projects__form');
       var name = document.createElement('input');
       name.className = 'input';
-      name.maxLength = 60;
-      name.placeholder = projectForm === 'new' ? 'Project name — “Summer gens”' : 'New name';
-      name.value = projectForm === 'rename' && p0 ? p0.name : (needle || '');
-      name.setAttribute('aria-label', projectForm === 'new' ? 'New project name' : 'New name');
-      var okBtn = el('button', 'btn-primary', projectForm === 'new' ? 'Create' : 'Rename');
+      if (projectForm === 'budget') {
+        name.type = 'number'; name.min = '1'; name.step = '1'; name.inputMode = 'decimal';
+        name.placeholder = 'Budget in USD — 50';
+        name.value = p0 && p0.budget ? String(p0.budget) : '';
+        name.setAttribute('aria-label', 'Budget in US dollars');
+      } else {
+        name.maxLength = 60;
+        name.placeholder = projectForm === 'new' ? 'Project name — “Summer gens”' : 'New name';
+        name.value = projectForm === 'rename' && p0 ? p0.name : (needle || '');
+        name.setAttribute('aria-label', projectForm === 'new' ? 'New project name' : 'New name');
+      }
+      var okBtn = el('button', 'btn-primary', projectForm === 'new' ? 'Create' : projectForm === 'budget' ? 'Save' : 'Rename');
       okBtn.type = 'button';
       var submit = function () {
         var text = name.value.trim();
         if (!text) { name.focus(); return; }
-        var req = projectForm === 'new' ? projectAction('create', { name: text }) : projectAction('rename', { id: p0.id, name: text });
+        if (name.dataset.mode === 'budget' && !(Number(text) > 0)) { name.focus(); return; }
+        var req = name.dataset.mode === 'new' ? projectAction('create', { name: text })
+          : name.dataset.mode === 'budget' ? projectAction('budget', { id: p0.id, budget: Number(text) })
+          : projectAction('rename', { id: p0.id, name: text });
         req.then(function (j) {
           projectForm = null; projectSearch = '';
           var made = j.project && name.dataset.mode === 'new' ? j.project : null;
@@ -3669,7 +3758,8 @@
           return moved.then(loadProjects).then(function () {
             if (made) setProject(made.id); else renderProjectPill();
             renderProjectPop();
-            toast(!made ? 'Project renamed' : carry ? 'Moved to ' + made.name + ' — you are in it now' : 'Project created — you are in it now');
+            toast(made ? (carry ? 'Moved to ' + made.name + ' — you are in it now' : 'Project created — you are in it now')
+              : name.dataset.mode === 'budget' ? 'Budget set — runs stop at ' + money(Number(text)) : 'Project renamed');
           });
         }, function (e) { toast(e.message || 'That could not be saved'); });
       };
@@ -3706,7 +3796,16 @@
     var d = p.defaults, prices = (config && config.prices) || {};
     fact('Opens with', d ? [d.model && prices[d.model] ? prices[d.model].label : null, d.shape, d.resolution ? d.resolution.toUpperCase() : null, d.quality && d.quality !== 'auto' ? d.quality : null].filter(Boolean).join(' · ') || 'the usual settings' : 'the usual settings');
     fact('Spent', money(p.spent || 0) + ' in this project');
+    fact('Budget', p.budget ? money(p.spent || 0) + ' of ' + money(p.budget) + ((p.spent || 0) >= p.budget ? ' — reached' : '') : 'none');
     card.appendChild(facts);
+    if (p.budget) {
+      var frac = Math.min(1, (p.spent || 0) / p.budget);
+      var bar = el('div', 'pcardx__bar' + (frac >= 1 ? ' is-danger' : frac >= 0.8 ? ' is-warning' : ''));
+      var fill = el('i');
+      fill.style.width = Math.round(frac * 100) + '%';
+      bar.appendChild(fill);
+      card.appendChild(bar);
+    }
 
     var acts = el('div', 'pcardx__acts');
     var link = function (text, fn, danger) {
@@ -3720,6 +3819,10 @@
     link('Use current settings as its defaults', function () {
       projectAction('defaults', { id: p.id, defaults: { model: state.model, shape: currentShape(), resolution: currentResolution(), quality: acceptsQuality(state.model) ? state.quality : undefined } })
         .then(function () { return loadProjects(); }).then(function () { renderProjectPop(); toast('Saved — ' + p.name + ' opens with these settings'); }, function () { toast('That could not be saved'); });
+    });
+    link(p.budget ? 'Change budget' : 'Set a budget', function () { projectForm = 'budget'; renderProjectPop(); });
+    if (p.budget) link('Remove budget', function () {
+      projectAction('budget', { id: p.id, budget: null }).then(function () { return loadProjects(); }).then(function () { renderProjectPop(); toast('Budget removed'); }, function () { toast('That could not be saved'); });
     });
     if (p.defaults) link('Clear defaults', function () {
       projectAction('defaults', { id: p.id, defaults: {} }).then(function () { return loadProjects(); }).then(function () { renderProjectPop(); }, function () { toast('That could not be saved'); });
@@ -4263,8 +4366,9 @@
           return { status: 'done', error: null, image: {
             id: img.id, src: '/api/image/' + img.id, ext: (img.id.split('.').pop() || 'png'),
             bytes: 0, width: 0, height: 0, frame: img.frame,
-            favourite: Boolean(img.favourite), revised_prompt: null, project: img.project || null
-          } };
+            favourite: Boolean(img.favourite), revised_prompt: null, project: img.project || null,
+            model: img.model || r.model || null
+          }, model: img.model || r.model || null };
         });
         var at = Date.parse(r.timestamp) || Date.now();
         var kept = Array.isArray(r.sourceFiles) ? r.sourceFiles : [];
@@ -4281,6 +4385,7 @@
           // The photos it was made from, if the server still has every one.
           sources: [], sourceIds: kept,
           project: r.project || null,
+          models: (function () { var seen = []; r.images.forEach(function (im) { var m = im.model || r.model; if (m && seen.indexOf(m) === -1) seen.push(m); }); return seen; })(),
           ratio: null, user: r.user || null,
           frames: frames, controllers: [], status: 'done', startedAt: at, finishedAt: at,
           cost: r.cost, counted: true, cancelled: false, degraded: false, restored: true
@@ -4329,6 +4434,7 @@
     if (/^\/assets?\/?$/.test(location.pathname)) state.filter = 'assets';
     // The project: the address wins, then what was open last time.
     state.project = typeof saved.project === 'string' ? saved.project : null;
+    state.compare = saved.compare === true;
     var m = /^\/p\/([a-z0-9-]*)\/?$/.exec(location.pathname);
     if (m) { if (m[1] === 'unsorted') state.project = 'unsorted'; else if (m[1]) pendingSlug = m[1]; else state.project = null; }
     state.thumb = Math.min(5, Math.max(1, Number(saved.thumb) || 3));

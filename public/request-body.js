@@ -18,16 +18,19 @@
   // number of times this is called.
   function buildFrameBody(run, index, opts) {
     opts = opts || {};
+    // A run on two engines gives each frame its own model, and a size that
+    // model can do; a frame that says nothing takes the run's.
+    var frame = run.frames && run.frames[index] ? run.frames[index] : {};
     var body = {
       mode: run.mode === 'edit' ? 'edit' : 'generate',
-      model: run.model,
+      model: frame.model || run.model,
       prompt: run.prompt,
       n: 1,
       // Which frame of the run this is, 1-based. The server records it with
       // the saved image; without it every restored frame was "Frame 1".
       frame: index + 1,
       aspect_ratio: run.shape || 'auto',
-      resolution: run.resolution || '1k',
+      resolution: frame.resolution || run.resolution || '1k',
       user: opts.user || '',
       runId: run.id
     };

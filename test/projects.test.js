@@ -96,3 +96,20 @@ test('normalise drops anything malformed and fixes duplicate slugs', () => {
   assert.deepEqual(Object.keys(s.placements).sort(), [IMG(1), IMG(3)].sort());
   assert.deepEqual(P.normalise(null), P.empty());
 });
+
+test('a budget is a positive amount to the cent, or none; it survives a reload', () => {
+  const s = P.empty();
+  const id = P.create(s, 'Autumn').project.id;
+  assert.equal(P.setBudget(s, id, 50).changed, true);
+  assert.equal(P.find(s, id).budget, 50);
+  assert.equal(P.setBudget(s, id, '12.345').project.budget, 12.35);
+  assert.equal(P.setBudget(s, id, 12.35).changed, false, 'the same amount is no change');
+  for (const bad of [0, -5, 'lots', NaN, Infinity, 1e7, null, undefined]) {
+    assert.equal(P.setBudget(s, id, bad).project.budget, null, 'budget ' + String(bad) + ' reads as none');
+  }
+  assert.equal(P.setBudget(s, 'p-000000000000', 10).error, 'No such project.');
+  P.setBudget(s, id, 80);
+  const back = P.normalise(JSON.parse(JSON.stringify(s)));
+  assert.equal(P.find(back, id).budget, 80);
+  assert.equal(P.cleanBudget(' 9.99 '), 9.99);
+});
