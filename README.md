@@ -240,9 +240,11 @@ What is different about it:
 > service is a picture coming back: where the bytes sit in the documented
 > call's answer and the exact token fields for the cost. The readers accept
 > every spelling the docs give and fall back to the price table (shown as ≈)
-> if none match, so a mismatch shows as an estimate rather than a failure. Run
-> one real picture once billing is on and pin the response before trusting the
-> cost figure.
+> if none match, so a mismatch shows as an estimate rather than a failure.
+> Once billing is on, run `node scripts/check-google.js both` — one picture
+> per style, about $0.13 each — which prints the answer's shape, the token
+> counts and the cost the studio would record, and says OK or ATTENTION. Pin
+> the response in the tests before trusting the cost figure.
 
 Google offers two ways to ask for a picture and both give the same picture: the
 one its documentation now describes (`/v1beta/interactions`) and the older
@@ -902,6 +904,7 @@ not `node ../server.js`.
 server.js              the proxy, key handling, usage log, saved images
 lib/imagine.js         price table, limits, the xAI request builder and cost reading
 lib/google.js          the Google (Nano Banana) builders, readers and cost
+scripts/check-google.js one real Google call, printing the answer's shape (run once billing is on)
 lib/projects.js        projects: the folders, where pictures were moved, references
 lib/prompts.js         the prompt library
 lib/balance.js         what is left of the credit, from xAI's billing answers
