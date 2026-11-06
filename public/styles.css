@@ -472,6 +472,28 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   transition: border-color var(--t);
 }
 .avatar:hover { border-color: var(--structure); }
+/* A dot on the avatar when an engine's money is low; red when one is out. */
+.avatar { position: relative; }
+.avatar.is-low::after, .avatar.is-out::after {
+  content: ''; position: absolute; top: -2px; right: -2px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--warning); border: 2px solid var(--page);
+}
+.avatar.is-out::after { background: var(--danger); }
+
+/* The money rows in the profile card. */
+.money { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; font-size: 12.5px; }
+.money__row { display: flex; flex-direction: column; gap: 4px; }
+.money__head { display: flex; justify-content: space-between; gap: 10px; }
+.money__who { color: var(--muted); }
+.money__amount { font-weight: 500; }
+.money__note { font-size: 11.5px; color: var(--muted); }
+.money__bar { height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
+.money__bar i { display: block; height: 100%; background: var(--structure); border-radius: 2px; }
+.money__row.is-low .money__amount, .money__row.is-low .money__bar i { color: var(--warning); background: var(--warning); }
+.money__row.is-low .money__amount { background: none; }
+.money__row.is-out .money__amount, .money__row.is-out .money__bar i { color: var(--danger); background: var(--danger); }
+.money__row.is-out .money__amount { background: none; }
 
 .popover {
   position: absolute;

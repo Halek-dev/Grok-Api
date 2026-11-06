@@ -227,10 +227,19 @@ What is different about it:
   switch models.
 - **Photos go as data, not links.** The browser already sends them that way.
 - **Every picture carries Google's SynthID watermark**, invisibly.
-- **There is no "left" figure for Google.** It is pay-as-you-go on the card
-  behind the Google Cloud project, with no balance to read; the top bar's
-  *left* stays xAI's prepaid credit, and *Spent today* counts both engines
-  from the studio's own log (`provider` on each usage line).
+- **There is no "left" figure for Google — so the studio keeps its own.** Google
+  is pay-as-you-go on the card behind the Google Cloud project, invoiced
+  monthly, with no balance an API key can read. The top bar's *left* stays
+  xAI's prepaid credit; *Spent today* counts both engines. Click the avatar
+  (top right) for the money card: xAI's credit left, and Google's spend this
+  month — exact, from the studio's log, since nothing else uses the key. Set
+  `GOOGLE_MONTHLY_ALLOWANCE` (say `100`) and that row reads *$68.50 of
+  $100.00* with a bar; the avatar gets an amber dot when the last fifth or
+  the last $5 is reached and a red one when the month's allowance is used
+  up, at which point a Google picture is refused (`402 allowance_reached`)
+  until the variable is raised. If the Google project runs on promotional
+  credits rather than a card, set the allowance to what the credits are
+  worth and the same warning tells you when they are nearly gone.
 
 > **How far this has been verified, as of 6 November 2026:** to the door. Both
 > of Google's calls accepted the key, the headers and the request shape (no

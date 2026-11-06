@@ -75,6 +75,7 @@
   var accentEl = $('accent'), notifyEl = $('notify'), keysDialog = $('keys-dialog'),
       keysOpen = $('keys-open'), keysClose = $('keys-close');
   var whoBtn = $('who-btn'), whoPop = $('who-pop'), userName = $('user-name'), themeEl = $('theme');
+  var moneyEl = $('money');
   var results = $('results'), empty = $('empty'), emptyTitle = $('empty-title'),
       emptyBody = $('empty-body'), emptySeeds = $('empty-seeds');
   var dock = $('dock'), runError = $('run-error'), retirementEl = $('retirement'),
@@ -400,12 +401,17 @@
   // not, or xAI is not answering, the element stays hidden and nothing is
   // implied about the balance.
   var LOW_BALANCE = 5;
+  // The last answer from /api/balance: xAI's credit and Google's month.
+  var lastMoney = null;
   async function refreshBalance() {
     if (!config || app.hidden) return;
     try {
       var res = await fetch('/api/balance', { headers: authHeaders({}) });
       if (!res.ok) { balanceEl.hidden = true; return; }
       var b = await res.json();
+      lastMoney = b || null;
+      renderMoney();
+      renderAvatar();
       if (!b || !b.available) { balanceEl.hidden = true; return; }
       balanceEl.hidden = false;
       balanceEl.innerHTML = '';
@@ -419,6 +425,61 @@
         ' Refreshed about once a minute.';
     } catch (err) {
       balanceEl.hidden = true;
+    }
+  }
+
+  // Is any engine's money low, or gone? xAI by its real balance, Google by
+  // the month's allowance.
+  function moneyState() {
+    var m = lastMoney || {};
+    var g = m.google || {};
+    var xaiOut = m.available && m.remaining <= 0;
+    var xaiLow = m.available && !xaiOut && m.remaining < LOW_BALANCE;
+    return { low: Boolean(xaiLow || (g.enabled && g.low)), out: Boolean(xaiOut || (g.enabled && g.out)), google: g, xai: m };
+  }
+
+  // The money rows in the profile card: one per engine with a key.
+  function renderMoney() {
+    if (!moneyEl) return;
+    moneyEl.innerHTML = '';
+    var m = lastMoney;
+    if (!m) { moneyEl.appendChild(el('div', 'money__note', 'Reading the balances…')); return; }
+    var row = function (who, amount, note, bar, tone) {
+      var r = el('div', 'money__row' + (tone ? ' ' + tone : ''));
+      var head = el('div', 'money__head');
+      head.appendChild(el('span', 'money__who', who));
+      head.appendChild(el('span', 'money__amount num', amount));
+      r.appendChild(head);
+      if (bar != null) {
+        var track = el('div', 'money__bar');
+        var fill = el('i');
+        fill.style.width = Math.round(Math.min(1, bar) * 100) + '%';
+        track.appendChild(fill);
+        r.appendChild(track);
+      }
+      if (note) r.appendChild(el('div', 'money__note', note));
+      moneyEl.appendChild(r);
+    };
+    if (m.available) {
+      row('xAI credit left', money(m.remaining),
+        (m.purchased != null ? money(m.purchased) + ' bought in all, ' + money(m.used) + ' used. ' : '') + 'The console’s “Credits remaining”.',
+        m.purchased ? m.used / m.purchased : null,
+        m.remaining <= 0 ? 'is-out' : m.remaining < LOW_BALANCE ? 'is-low' : '');
+    } else if (config && config.hasKey) {
+      row('xAI credit', 'not shown', 'The server has no management key, so what is left cannot be read.');
+    }
+    var g = m.google;
+    if (g && g.enabled) {
+      if (g.allowance) {
+        row('Google, ' + g.month, money(g.spentMonth) + ' of ' + money(g.allowance),
+          g.out ? 'The month’s allowance is used up: Google pictures are refused until it is raised.'
+            : g.low ? money(g.left) + ' left of this month’s allowance.'
+            : money(g.left) + ' left. Google is pay-as-you-go on a card, so this is the studio’s own line, not a balance.',
+          g.fraction, g.out ? 'is-out' : g.low ? 'is-low' : '');
+      } else {
+        row('Google, ' + g.month, money(g.spentMonth) + ' so far',
+          'Pay-as-you-go on the card behind the Google project — there is no balance to read. Set GOOGLE_MONTHLY_ALLOWANCE on the server to be warned when it runs high.');
+      }
     }
   }
 
@@ -1186,6 +1247,16 @@
         : 'Describe the image first. Nothing is charged until you generate.';
     }
     if (wordCount(promptEl.value) < 3) return 'A prompt needs at least three words.';
+    // Google's monthly allowance, for the Google part of the run.
+    var ms = moneyState();
+    if (ms.google && ms.google.enabled && ms.google.allowance) {
+      var gModels = runModels().filter(function (id) { return engineOf(id) === 'google'; });
+      if (gModels.length) {
+        var gCost = gModels.reduce(function (s, id) { var e = estimateFor(id); return s + (e ? e.total : 0); }, 0);
+        if (ms.google.out) return 'Google has used up its allowance for ' + ms.google.month + '. Raise GOOGLE_MONTHLY_ALLOWANCE on the server, or run on xAI.';
+        if (gCost > ms.google.left + 1e-9) return 'The Google part of this run (' + money(gCost) + ') would pass this month’s allowance — ' + money(ms.google.left) + ' left.';
+      }
+    }
     // A project's budget is checked here, before anything is sent, for the
     // whole run; the server checks again per picture.
     var bp = currentProject();
@@ -1436,6 +1507,10 @@
         (pick ? 'Switch to ' + prices[pick].label + ' in the Model list, or try again in a few minutes. '
               : 'Try again in a few minutes. ') +
         'Your credits and the team key are fine.'];
+    }
+    if (code === 'allowance_reached') {
+      return ['danger', 'Google’s allowance for the month is used up',
+        message + ' Raise GOOGLE_MONTHLY_ALLOWANCE on the server, or run on xAI. The avatar at the top right shows the figures.'];
     }
     if (code === 'budget_reached') {
       return ['danger', 'Project budget reached',
@@ -4213,7 +4288,11 @@
     whoBtn.innerHTML = '';
     var ini = initials(state.name);
     if (ini) whoBtn.textContent = ini; else whoBtn.appendChild(icon('user', 16));
-    whoBtn.title = state.name.trim() ? 'Working as ' + state.name.trim() : 'Add your name';
+    var ms = moneyState();
+    whoBtn.classList.toggle('is-low', ms.low && !ms.out);
+    whoBtn.classList.toggle('is-out', ms.out);
+    var warn = ms.out ? ' · an engine’s money is used up — open for details' : ms.low ? ' · money running low — open for details' : '';
+    whoBtn.title = (state.name.trim() ? 'Working as ' + state.name.trim() : 'Add your name') + warn;
   }
 
   function closeWho(refocus) {
@@ -4224,6 +4303,7 @@
   whoBtn.addEventListener('click', function () {
     var open = whoPop.hidden;
     whoPop.hidden = !open;
+    if (open) { renderMoney(); refreshBalance(); }
     whoBtn.setAttribute('aria-expanded', String(open));
     if (open) userName.focus();
   });

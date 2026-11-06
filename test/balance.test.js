@@ -107,3 +107,31 @@ test('at the start of a cycle nothing has been used yet, so the opening credit i
   p.coreInvoice.prepaidCreditsUsed = { val: '' };
   assert.equal(remainingFrom(p, REAL_LEDGER).remaining, 51.7);
 });
+
+const { engineSpend, allowanceState } = require('../lib/balance.js');
+
+test('Google\'s spend this month and today, from the usage log, by provider or by the model\'s name', () => {
+  const now = new Date('2026-11-06T12:00:00Z');
+  const rows = [
+    { timestamp: '2026-10-31T23:59:00Z', provider: 'google', cost: 5 },           // last month
+    { timestamp: '2026-11-02T10:00:00Z', provider: 'google', cost: 0.134 },
+    { timestamp: '2026-11-06T09:00:00Z', provider: 'google', cost: 0.24 },         // today
+    { timestamp: '2026-11-06T10:00:00Z', model: 'gemini-3-pro-image', cost: 0.134 }, // before provider was logged
+    { timestamp: '2026-11-06T10:30:00Z', provider: 'xai', cost: 0.04 },
+    { timestamp: '2026-11-05T10:30:00Z', model: 'grok-imagine-image-2.0', cost: 0.06 },
+    { timestamp: 'garbage', provider: 'google', cost: 99 }
+  ];
+  assert.deepEqual(engineSpend(rows, 'google', now), { month: 0.51, today: 0.37 }, 'to the cent');
+  assert.deepEqual(engineSpend(rows, 'xai', now), { month: 0.1, today: 0.04 });
+  assert.deepEqual(engineSpend([], 'google', now), { month: 0, today: 0 });
+});
+
+test('the allowance: low in the last fifth or under $5, out at the line, none when unset', () => {
+  assert.deepEqual(allowanceState(10, 0), { allowance: null, left: null, fraction: null, low: false, out: false });
+  assert.deepEqual(allowanceState(20, 100), { allowance: 100, left: 80, fraction: 0.2, low: false, out: false });
+  assert.equal(allowanceState(81, 100).low, true);
+  assert.equal(allowanceState(6, 10).low, true, 'under five dollars left');
+  assert.equal(allowanceState(100, 100).out, true);
+  assert.equal(allowanceState(100, 100).low, false, 'out is not also low');
+  assert.equal(allowanceState(140, 100).left, 0, 'never negative');
+});

@@ -34,13 +34,13 @@ function makeData(dir) {
   }) + '\n');
 }
 
-function start(dir) {
+function start(dir, extraEnv) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER], {
       env: Object.assign({}, process.env, {
         XAI_API_KEY: 'test', TEAM_PASSWORD: '', HOST: '127.0.0.1', PORT: '0', DATA_DIR: dir,
         XAI_BASE_URL: 'http://127.0.0.1:9/v1', UPSTREAM_TIMEOUT_MS: '3000', MAX_STORED_IMAGES: '0'
-      }),
+      }, extraEnv || {}),
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let out = '';
@@ -103,6 +103,46 @@ test('a picture that would pass the budget is refused before anything is sent; a
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: PROJECT, budget: 'lots' })
     }).then((r) => r.json());
     assert.equal(removed.project.budget, null);
+  } finally {
+    child.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Google\'s monthly allowance: a picture past it is refused, the money card says where the month stands', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imagine-allowance-'));
+  fs.mkdirSync(path.join(dir, 'images'), { recursive: true });
+  const month = new Date().toISOString().slice(0, 7);
+  fs.writeFileSync(path.join(dir, 'usage.jsonl'), JSON.stringify({
+    timestamp: month + '-01T00:10:00.000Z', runId: 'g1', mode: 'generate', model: 'gemini-3-pro-image', provider: 'google',
+    cost: 0.15, images: 1, files: []
+  }) + '\n');
+  const { child, base } = await start(dir, { GOOGLE_API_KEY: 'test-google', GOOGLE_BASE_URL: 'http://127.0.0.1:9', GOOGLE_MONTHLY_ALLOWANCE: '0.2' });
+  try {
+    const money = await fetch(base + '/api/balance').then((r) => r.json());
+    assert.equal(money.google.enabled, true);
+    assert.equal(money.google.spentMonth, 0.15);
+    assert.equal(money.google.allowance, 0.2);
+    assert.equal(money.google.left, 0.05);
+    assert.equal(money.google.low, true);
+
+    // $0.15 + a $0.134 picture passes $0.20.
+    const refused = await fetch(base + '/api/images', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'generate', model: 'gemini-3-pro-image', prompt: 'a quiet harbour', resolution: '1k', n: 1 })
+    });
+    assert.equal(refused.status, 402);
+    const body = await refused.json();
+    assert.equal(body.code, 'allowance_reached');
+    assert.equal(body.engine, 'google');
+    assert.match(body.error, /\$0\.15 of \$0\.20/);
+
+    // xAI is untouched by Google's line: it reaches upstream (not there).
+    const xai = await fetch(base + '/api/images', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'generate', model: 'grok-imagine-image-2.0', prompt: 'a quiet harbour', resolution: '1k', n: 1 })
+    }).then((r) => r.json());
+    assert.equal(xai.code, 'network');
   } finally {
     child.kill();
     fs.rmSync(dir, { recursive: true, force: true });

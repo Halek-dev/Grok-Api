@@ -50,7 +50,7 @@ const PRICES = imagine.PRICES;
 const QUALITY_MODELS = imagine.QUALITY_MODELS;
 const { createThrottle } = require('./lib/throttle.js');
 const { classify, pickTraceHeaders, failureLogLine } = require('./lib/failures.js');
-const { remainingFrom } = require('./lib/balance.js');
+const { remainingFrom, engineSpend, allowanceState } = require('./lib/balance.js');
 const promptLib = require('./lib/prompts.js');
 const projectLib = require('./lib/projects.js');
 const google = require('./lib/google.js');
@@ -162,6 +162,11 @@ const GOOGLE_BASE = String(env('GOOGLE_BASE_URL', 'https://generativelanguage.go
 // Which of Google's two calls to make: 'interactions' (the documented one) or
 // 'generateContent' (the older one). See lib/google.js.
 const GOOGLE_API = String(env('GOOGLE_API', 'interactions')).trim() === 'generateContent' ? 'generateContent' : 'interactions';
+// What the team allows Google to cost in a month, in USD. Google has no
+// balance to read, so this is the line the studio holds instead: the profile
+// card shows how much of it is gone, the avatar warns when it is low, and a
+// Google picture past it is refused. 0 or unset: no line, only the figures.
+const GOOGLE_MONTHLY_ALLOWANCE = Math.max(0, Number(env('GOOGLE_MONTHLY_ALLOWANCE', 0)) || 0);
 
 // What the browser is offered: every model whose engine has a key.
 function offeredPrices() {
@@ -975,6 +980,27 @@ async function readBalance() {
   return value;
 }
 
+// Google's money: what the studio has sent this month and today, against the
+// allowance. Exact for what went through here; nothing else spends the key.
+async function googleMoney() {
+  let raw = '';
+  try { raw = await fsp.readFile(USAGE_LOG, 'utf8'); } catch { /* nothing spent */ }
+  const rows = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { rows.push(JSON.parse(line)); } catch { /* torn line */ }
+  }
+  const spend = engineSpend(rows, 'google', new Date());
+  const state = allowanceState(spend.month, GOOGLE_MONTHLY_ALLOWANCE);
+  const now = new Date();
+  return Object.assign({
+    enabled: Boolean(GOOGLE_API_KEY),
+    spentMonth: spend.month,
+    spentToday: spend.today,
+    month: now.toLocaleString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  }, state);
+}
+
 // ---------------------------------------------------------------------------
 // Upstream error handling
 // ---------------------------------------------------------------------------
@@ -1322,6 +1348,19 @@ async function handleImages(req, res, body) {
           'This picture would take “' + pj.name + '” past its budget of $' + pj.budget.toFixed(2) + ' — $' + spent.toFixed(2) + ' is already spent. Nothing was charged.',
           { code: 'budget_reached', project: project, budget: pj.budget, spent: Math.round(spent * 100) / 100 });
       }
+    }
+  }
+
+  // Google's monthly allowance, when one is set: a picture past the line is
+  // refused, the same way a project budget refuses one.
+  if (provider === 'google' && GOOGLE_MONTHLY_ALLOWANCE) {
+    const gm = await googleMoney();
+    const est = google.estimateCost({ model: model, resolution: built.resolution, mode: mode, count: 1, sources: built.sources }) || 0;
+    if (gm.spentMonth + est > GOOGLE_MONTHLY_ALLOWANCE + 1e-9) {
+      logFailure(Object.assign({}, about, { status: null, code: 'allowance_reached', message: 'Google at $' + gm.spentMonth.toFixed(2) + ' of the $' + GOOGLE_MONTHLY_ALLOWANCE.toFixed(2) + ' monthly allowance' }));
+      return fail(res, 402,
+        'Google has reached its allowance for ' + gm.month + ': $' + gm.spentMonth.toFixed(2) + ' of $' + GOOGLE_MONTHLY_ALLOWANCE.toFixed(2) + '. Nothing was charged.',
+        { code: 'allowance_reached', engine: 'google', allowance: GOOGLE_MONTHLY_ALLOWANCE, spent: gm.spentMonth });
     }
   }
 
@@ -1809,7 +1848,7 @@ const server = http.createServer(async function (req, res) {
 
       if (urlPath === '/api/balance') {
         if (req.method !== 'GET') return fail(res, 405, 'Use GET for /api/balance.');
-        return sendJson(res, 200, await readBalance());
+        return sendJson(res, 200, Object.assign({}, await readBalance(), { google: await googleMoney() }));
       }
 
       if (urlPath === '/api/describe') {
@@ -1925,6 +1964,7 @@ server.listen(PORT, HOST, function () {
   console.log(STUDIO_NAME + ' on http://' + shown + ':' + bound);
   console.log('  API key           ' + (XAI_API_KEY ? 'loaded' : 'MISSING — add XAI_API_KEY to .env'));
   console.log('  Google key        ' + (GOOGLE_API_KEY ? 'loaded — Nano Banana Pro offered, via ' + GOOGLE_API : 'not set (Nano Banana Pro is not offered)'));
+  if (GOOGLE_API_KEY) console.log('  Google allowance  ' + (GOOGLE_MONTHLY_ALLOWANCE ? '$' + GOOGLE_MONTHLY_ALLOWANCE.toFixed(2) + ' a month — warns when low, refuses past it' : 'none — set GOOGLE_MONTHLY_ALLOWANCE to be warned when Google spend runs high'));
   console.log('  Team password     ' + (TEAM_PASSWORD ? 'required, guesses throttled per address' : 'not set (anyone who can reach this port can spend credits)'));
   console.log('  Upstream timeout  ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + 's');
   console.log('  Credit balance    ' + (XAI_MANAGEMENT_KEY ? 'shown (management key loaded)' : 'not shown — set XAI_MANAGEMENT_KEY to show what is left'));
