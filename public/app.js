@@ -305,13 +305,18 @@
   }
   function modelLabel(model) { var p = priceEntry(model); return p ? p.label : model; }
 
-  // A shape or size the new model cannot do falls back, quietly, to one it can.
+  // A shape or size the new model cannot do falls back, quietly, to one it
+  // can: the shape to auto, the size to the largest the model has — the same
+  // rule a frame follows on a run made on two engines.
   function clampToModel() {
     var shapes = modelShapes(state.model), sizes = modelResolutions(state.model);
+    var largest = sizes[sizes.length - 1] || '1k';
     if (shapes.indexOf(state.shape) === -1) state.shape = 'auto';
     if (shapes.indexOf(state.editShape) === -1) state.editShape = 'auto';
-    if (sizes.indexOf(state.resolution) === -1) state.resolution = sizes[0] || '1k';
-    if (sizes.indexOf(state.editResolution) === -1) state.editResolution = sizes[0] || '1k';
+    if (sizes.indexOf(state.resolution) === -1) state.resolution = largest;
+    if (sizes.indexOf(state.editResolution) === -1) state.editResolution = largest;
+    // Running on both engines means something only while there are two.
+    if (state.compare && config && !pairModel()) { state.compare = false; persist(); }
   }
   function currentCount() { return mode() === 'edit' ? state.variants : state.frames; }
   function maxCount() { return mode() === 'edit' ? MAX_EDIT_VARIANTS : MAX_FRAMES; }
@@ -2359,11 +2364,13 @@
     closeLightbox();
     var sources;
     try { sources = await sourceData(run); } catch (err) { photosGone(); return; }
-    var both = run.models && run.models.length > 1;
+    // The engines the run went to, less any whose key has since gone.
+    var live = (run.models || []).filter(engineHasKey);
+    var both = live.length > 1;
     var settings = {
-      mode: run.mode, model: run.model, models: both ? run.models : null, prompt: run.prompt, quality: run.quality,
+      mode: run.mode, model: engineHasKey(run.model) ? run.model : (live[0] || run.model), models: both ? live : null, prompt: run.prompt, quality: run.quality,
       shape: run.shape, resolution: run.resolution,
-      n: run.frames ? Math.ceil(run.frames.length / (both ? run.models.length : 1)) : run.n,
+      n: run.frames ? Math.ceil(run.frames.length / Math.max(1, (run.models || []).length)) : run.n,
       plan: run.plan || 'reference', sources: sources, ratio: run.ratio || null
     };
     var go = function () { submitRun(settings); };

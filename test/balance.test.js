@@ -130,7 +130,10 @@ test('the allowance: low in the last fifth or under $5, out at the line, none wh
   assert.deepEqual(allowanceState(10, 0), { allowance: null, left: null, fraction: null, low: false, out: false });
   assert.deepEqual(allowanceState(20, 100), { allowance: 100, left: 80, fraction: 0.2, low: false, out: false });
   assert.equal(allowanceState(81, 100).low, true);
-  assert.equal(allowanceState(6, 10).low, true, 'under five dollars left');
+  assert.equal(allowanceState(96, 100).low, true, 'under five dollars left on a big allowance');
+  assert.equal(allowanceState(6, 10).low, false, 'a $10 allowance is not low at $4 left — the line is a fifth');
+  assert.equal(allowanceState(0, 4).low, false, 'a small allowance is not low before a cent is spent');
+  assert.equal(allowanceState(3.5, 4).low, true);
   assert.equal(allowanceState(100, 100).out, true);
   assert.equal(allowanceState(100, 100).low, false, 'out is not also low');
   assert.equal(allowanceState(140, 100).left, 0, 'never negative');

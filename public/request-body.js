@@ -44,8 +44,13 @@
         body.sources = sources.slice();
         body.consent = opts.consent === true;
       } else {
-        // Edit each: this frame edits its own photo and nothing else.
-        body.sources = sources[index] ? [sources[index]] : [];
+        // Edit each: this frame edits its own photo and nothing else. On a
+        // run made on two engines the frames alternate engines, so photo k
+        // is frames 2k and 2k+1: the photo is the index divided by the
+        // number of models, not the index itself.
+        var perPhoto = Array.isArray(run.models) && run.models.length > 1 ? run.models.length : 1;
+        var photo = sources[Math.floor(index / perPhoto)];
+        body.sources = photo ? [photo] : [];
       }
     }
     return body;

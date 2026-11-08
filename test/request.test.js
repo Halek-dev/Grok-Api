@@ -270,3 +270,17 @@ test('a frame carries its own model and size on a run made on two engines; a fra
   // A run with no frames array at all is the old shape and still works.
   assert.equal(client.buildFrameBody(run({ frames: undefined }), 0, {}).model, M20);
 });
+
+test('edit-each on two engines: photo k goes to frames 2k and 2k+1, each on its own model', () => {
+  const both = run({
+    mode: 'edit', plan: 'each', model: M20, sources: ['p1', 'p2', 'p3'],
+    models: [M20, 'gemini-3-pro-image'],
+    frames: [{ model: M20 }, { model: 'gemini-3-pro-image' }, { model: M20 }, { model: 'gemini-3-pro-image' }, { model: M20 }, { model: 'gemini-3-pro-image' }]
+  });
+  const got = [0, 1, 2, 3, 4, 5].map((i) => client.buildFrameBody(both, i, {}));
+  assert.deepEqual(got.map((b) => b.sources), [['p1'], ['p1'], ['p2'], ['p2'], ['p3'], ['p3']]);
+  assert.deepEqual(got.map((b) => b.model), [M20, 'gemini-3-pro-image', M20, 'gemini-3-pro-image', M20, 'gemini-3-pro-image']);
+  // One engine: unchanged — photo k is frame k.
+  const one = run({ mode: 'edit', plan: 'each', sources: ['p1', 'p2'], frames: [{}, {}] });
+  assert.deepEqual([0, 1].map((i) => client.buildFrameBody(one, i, {}).sources), [['p1'], ['p2']]);
+});

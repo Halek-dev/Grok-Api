@@ -490,10 +490,10 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
 .money__note { font-size: 11.5px; color: var(--muted); }
 .money__bar { height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
 .money__bar i { display: block; height: 100%; background: var(--structure); border-radius: 2px; }
-.money__row.is-low .money__amount, .money__row.is-low .money__bar i { color: var(--warning); background: var(--warning); }
-.money__row.is-low .money__amount { background: none; }
-.money__row.is-out .money__amount, .money__row.is-out .money__bar i { color: var(--danger); background: var(--danger); }
-.money__row.is-out .money__amount { background: none; }
+.money__row.is-low .money__amount { color: var(--warning); }
+.money__row.is-low .money__bar i { background: var(--warning); }
+.money__row.is-out .money__amount { color: var(--danger); }
+.money__row.is-out .money__bar i { background: var(--danger); }
 
 .popover {
   position: absolute;
@@ -1512,6 +1512,9 @@ button, input, textarea, select { font-family: inherit; color: inherit; }
   .pill--project { width: 38px; max-width: none; padding: 0; justify-content: center; }
   .pill--project .pill__text, .pill--project svg:last-child { display: none; }
   .pill--project.is-on { border-color: var(--structure); color: var(--structure); }
+  /* The budget's colour outranks "a project is open": that is the news. */
+  .pill--project.is-on.is-warning { border-color: var(--warning-hairline); color: var(--warning); }
+  .pill--project.is-on.is-danger { border-color: var(--danger); color: var(--danger); }
   .popover--projects { position: fixed; left: 12px; right: 12px; top: calc(var(--topbar-h) + 4px); width: auto; }
   .projects__list { max-height: 36vh; }
   .topbar__spend-label, .topbar__spend-runs { display: none; }

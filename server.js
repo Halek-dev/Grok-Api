@@ -523,6 +523,7 @@ async function describeProjects() {
 // Usage log
 // ---------------------------------------------------------------------------
 async function appendUsage(entry) {
+  googleMoneyCache = { at: 0, value: null };   // the next ask reads the new line
   try {
     await fsp.appendFile(USAGE_LOG, JSON.stringify(entry) + '\n', 'utf8');
   } catch (err) {
@@ -982,7 +983,19 @@ async function readBalance() {
 
 // Google's money: what the studio has sent this month and today, against the
 // allowance. Exact for what went through here; nothing else spends the key.
+// Read once a minute, or on the next ask after a picture is logged; a server
+// without a Google key answers a constant without touching the disk.
+let googleMoneyCache = { at: 0, value: null };
 async function googleMoney() {
+  if (!GOOGLE_API_KEY) {
+    return Object.assign({ enabled: false, spentMonth: 0, spentToday: 0, month: '' }, allowanceState(0, 0));
+  }
+  if (googleMoneyCache.value && Date.now() - googleMoneyCache.at < 60000) return googleMoneyCache.value;
+  const value = await readGoogleMoney();
+  googleMoneyCache = { at: Date.now(), value: value };
+  return value;
+}
+async function readGoogleMoney() {
   let raw = '';
   try { raw = await fsp.readFile(USAGE_LOG, 'utf8'); } catch { /* nothing spent */ }
   const rows = [];
