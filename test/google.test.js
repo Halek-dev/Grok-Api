@@ -192,3 +192,49 @@ test('a data URI is split into type and bare base64; anything else is refused', 
   assert.equal(google.parseDataUri('data:text/plain;base64,AAAA'), null);
   assert.equal(google.parseDataUri(''), null);
 });
+
+// What the live service answered on 8 November 2026, once billing was on —
+// one 1K picture each way, the picture's bytes replaced by their length.
+// Pinned so a reader that stops reading either of these fails here first.
+const LIVE_INTERACTIONS = {
+  id: 'v1_ChdjaGF0X2V4YW1wbGU', status: 'completed', object: 'interaction', model: 'gemini-3-pro-image',
+  created: '2026-11-08T10:30:13Z', updated: '2026-11-08T10:30:13Z', service_tier: 'standard',
+  usage: {
+    total_tokens: 1366, total_input_tokens: 14, input_tokens_by_modality: [{ modality: 'text', tokens: 14 }],
+    total_cached_tokens: 0, total_output_tokens: 1212, output_tokens_by_modality: [{ modality: 'image', tokens: 1120 }],
+    total_tool_use_tokens: 0, total_thought_tokens: 140, initial_input_tokens: 121
+  },
+  steps: [
+    { signature: 'CiIBVKhc7hlVrPkfEHtMrQ', type: 'thought' },
+    { content: [{ data: 'LIVEJPEGBYTES', mime_type: 'image/jpeg', type: 'image' }], type: 'model_output' }
+  ]
+};
+const LIVE_GENERATE_CONTENT = {
+  candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: 'LIVEJPEGBYTES' } }], role: 'model' }, finishReason: 'STOP', index: 0 }],
+  usageMetadata: {
+    promptTokenCount: 14, candidatesTokenCount: 1219, totalTokenCount: 1393,
+    promptTokensDetails: [{ modality: 'TEXT', tokenCount: 14 }], candidatesTokensDetails: [{ modality: 'IMAGE', tokenCount: 1120 }],
+    thoughtsTokenCount: 160, serviceTier: 'standard'
+  },
+  modelVersion: 'gemini-3-pro-image', responseId: 'PU_waua7GLOGxs0PlZqo6A4'
+};
+
+test('the live interactions answer: a JPEG from the model_output step, tokens from the total_* fields and output_tokens_by_modality', () => {
+  const read = google.imagesFromResponse(LIVE_INTERACTIONS, 'interactions');
+  assert.deepEqual(read.images, [{ b64: 'LIVEJPEGBYTES', mime: 'image/jpeg' }]);
+  assert.equal(read.blocked, null);
+  assert.deepEqual(google.usageFromResponse(LIVE_INTERACTIONS, 'interactions'), { input: 14, outputImage: 1120, outputText: 92, thoughts: 140 });
+  const cost = google.costFromResponse(LIVE_INTERACTIONS, 'interactions', { model: 'gemini-3-pro-image', resolution: '1k', mode: 'generate', count: 1 });
+  assert.equal(cost.estimated, false, 'the real answer is costed from its tokens, not the table');
+  // 14 × $2/M + 1120 × $120/M + (92 + 140) × $12/M
+  assert.equal(cost.cost, 0.137212);
+});
+
+test('the live generateContent answer: a JPEG inlineData part, tokens from usageMetadata', () => {
+  const read = google.imagesFromResponse(LIVE_GENERATE_CONTENT, 'generateContent');
+  assert.deepEqual(read.images, [{ b64: 'LIVEJPEGBYTES', mime: 'image/jpeg' }]);
+  assert.deepEqual(google.usageFromResponse(LIVE_GENERATE_CONTENT, 'generateContent'), { input: 14, outputImage: 1120, outputText: 99, thoughts: 160 });
+  const cost = google.costFromResponse(LIVE_GENERATE_CONTENT, 'generateContent', { model: 'gemini-3-pro-image', resolution: '1k', mode: 'generate', count: 1 });
+  assert.equal(cost.estimated, false);
+  assert.equal(cost.cost, 0.137536);
+});

@@ -241,19 +241,20 @@ What is different about it:
   credits rather than a card, set the allowance to what the credits are
   worth and the same warning tells you when they are nearly gone.
 
-> **How far this has been verified, as of 6 November 2026:** to the door. Both
-> of Google's calls accepted the key, the headers and the request shape (no
-> 400) and turned the request away for want of billing — the key was on the
-> free tier, which has no allowance for this model. Those two real refusals are
-> pinned in `test/google.test.js`. What has *not* yet been seen from the live
-> service is a picture coming back: where the bytes sit in the documented
-> call's answer and the exact token fields for the cost. The readers accept
-> every spelling the docs give and fall back to the price table (shown as ≈)
-> if none match, so a mismatch shows as an estimate rather than a failure.
-> Once billing is on, run `node scripts/check-google.js both` — one picture
-> per style, about $0.13 each — which prints the answer's shape, the token
-> counts and the cost the studio would record, and says OK or ATTENTION. Pin
-> the response in the tests before trusting the cost figure.
+> **How far this has been verified, as of 8 November 2026:** all the way.
+> With billing enabled on the key, `node scripts/check-google.js both` made
+> one 1K picture each way. Both styles answered a JPEG (about 0.7–0.9 MB)
+> and token counts — 14 in, 1120 of image out, 90–160 of thinking — which
+> the studio costs at $0.137 to $0.138 a picture, a few cents over the table's
+> $0.134 because the thinking is billed on top. The documented `interactions`
+> call spells its counts `total_input_tokens`, `total_output_tokens`,
+> `total_thought_tokens` and `output_tokens_by_modality`, not the names the
+> docs showed; the reader now takes both, and both live answers are pinned
+> (bytes replaced by their length) in `test/google.test.js`. Before billing,
+> the same key on the free tier was turned away with "limit: 0 on Free Tier"
+> — also pinned, and shown as *Google is not billing this key*. The check
+> keeps each answer, redacted, at `.local/google-<style>.json`; run it again
+> whenever Google changes something.
 
 **Run on both engines.** With both keys on the server, the Model list ends
 with *Run on both engines*. Switched on, every frame is made twice — once by
