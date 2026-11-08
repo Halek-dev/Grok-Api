@@ -17,6 +17,10 @@
  * server does. If the answer's shape differs from what lib/google.js reads,
  * the studio would show the cost as an estimate (≈): fix the reader there,
  * and pin the new shape in test/google.test.js.
+ *
+ * Each answer is also kept, with the picture's bytes replaced by their
+ * length, at .local/google-<style>.json (gitignored) — the fixture to pin
+ * from, with nothing in it but field names and numbers.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -59,6 +63,30 @@ function shape(v, depth) {
   return String(v);
 }
 
+// The answer with its pictures taken out: a base64 run longer than a line is
+// replaced by a note of its length, so the file holds shape, not bytes.
+function redact(v) {
+  if (Array.isArray(v)) return v.map(redact);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v)) out[k] = redact(v[k]);
+    return out;
+  }
+  if (typeof v === 'string' && v.length > 200 && /^[A-Za-z0-9+/=_-]+$/.test(v)) return '<base64 ' + v.length + ' chars>';
+  return v;
+}
+function keep(style, status, json) {
+  const dir = path.join(ROOT, '.local');
+  const file = path.join(dir, 'google-' + style + '.json');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ status: status, body: redact(json) }, null, 2) + '\n');
+    console.log('  kept (redacted): ' + path.relative(ROOT, file));
+  } catch (err) {
+    console.log('  could not keep a copy: ' + err.message);
+  }
+}
+
 async function check(style) {
   const input = { mode: 'generate', model: 'gemini-3-pro-image', prompt: 'A small red lighthouse on a rocky shore at dusk, soft light', aspect_ratio: '1:1', resolution: '1k' };
   const built = google.buildImageRequest(input, style);
@@ -80,6 +108,7 @@ async function check(style) {
   let json;
   try { json = JSON.parse(text); } catch { console.log('  body is not JSON: ' + text.slice(0, 200)); return false; }
   console.log('  shape: ' + shape(json));
+  keep(style, res.status, json);
   if (!res.ok) {
     const named = google.classify(res.status, text);
     console.log('  the studio would say: code=' + named.code + (named.googleStatus ? ' (' + named.googleStatus + ')' : ''));

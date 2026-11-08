@@ -386,7 +386,7 @@ async function readPrompts() {
     // First run with the library: build it from what the usage log remembers.
     if (err && err.code === 'ENOENT') {
       try {
-        const rows = (await fsp.readFile(USAGE_LOG, 'utf8')).split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } });
+        const rows = (await readUsageText()).split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } });
         return promptLib.fromUsage(rows.filter(Boolean));
       } catch { /* no log either: an empty library */ }
     }
@@ -491,7 +491,7 @@ async function describeProjects() {
   const stats = {};
   const stat = (id) => (stats[id] = stats[id] || { images: 0, favourites: 0, spent: 0, cover: null, coverAt: '' });
   let raw = '';
-  try { raw = await fsp.readFile(USAGE_LOG, 'utf8'); } catch { /* no runs yet */ }
+  try { raw = await readUsageText(); } catch { /* no runs yet */ }
   for (const line of raw.split('\n')) {
     let r;
     try { r = JSON.parse(line); } catch { continue; }
@@ -522,7 +522,23 @@ async function describeProjects() {
 // ---------------------------------------------------------------------------
 // Usage log
 // ---------------------------------------------------------------------------
+// The log's text, read once per change: every reader asks here, and a file
+// whose size and time are what they were last time is not read again. Each
+// picture checks a project's budget, each poll reads the money, the gallery
+// reads the runs — all from the same file, which only ever grows by a line.
+// Throws ENOENT like readFile does, so the readers' catches stand.
+let usageTextCache = null;   // { size, mtimeMs, text }
+async function readUsageText() {
+  const st = await fsp.stat(USAGE_LOG);
+  const c = usageTextCache;
+  if (c && c.size === st.size && c.mtimeMs === st.mtimeMs) return c.text;
+  const text = await fsp.readFile(USAGE_LOG, 'utf8');
+  usageTextCache = { size: st.size, mtimeMs: st.mtimeMs, text: text };
+  return text;
+}
+
 async function appendUsage(entry) {
+  usageTextCache = null;
   googleMoneyCache = { at: 0, value: null };   // the next ask reads the new line
   try {
     await fsp.appendFile(USAGE_LOG, JSON.stringify(entry) + '\n', 'utf8');
@@ -536,7 +552,7 @@ async function appendUsage(entry) {
 async function readUsage(since) {
   let raw;
   try {
-    raw = await fsp.readFile(USAGE_LOG, 'utf8');
+    raw = await readUsageText();
   } catch {
     return { runs: 0, images: 0, total: 0, today: 0, recent: [] };
   }
@@ -819,7 +835,7 @@ async function readRuns(limit, favouritesOnly, before, view) {
   const store = await listProjectsStore();
   let raw;
   try {
-    raw = await fsp.readFile(USAGE_LOG, 'utf8');
+    raw = await readUsageText();
   } catch {
     return [];
   }
@@ -997,7 +1013,7 @@ async function googleMoney() {
 }
 async function readGoogleMoney() {
   let raw = '';
-  try { raw = await fsp.readFile(USAGE_LOG, 'utf8'); } catch { /* nothing spent */ }
+  try { raw = await readUsageText(); } catch { /* nothing spent */ }
   const rows = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;

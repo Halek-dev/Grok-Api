@@ -25,3 +25,5 @@ Thumbs.db
 
 # Local snapshots kept so a UI change can be undone. Not for the repo.
 .rollback/
+# What the live Google check last answered (redacted). Per machine.
+.local/
